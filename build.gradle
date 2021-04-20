@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets
 
 buildscript {
   repositories {
+    maven { url = "https://maven.aliyun.com/repository/public" }
     mavenCentral()
     jcenter()
     maven {
@@ -54,6 +55,7 @@ spotless {
 allprojects {
 
   repositories {
+    maven { url = "https://maven.aliyun.com/repository/public" }
     mavenCentral()
   }
 
