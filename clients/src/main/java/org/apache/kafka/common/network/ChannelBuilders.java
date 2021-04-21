@@ -111,6 +111,7 @@ public class ChannelBuilders {
                                          DelegationTokenCache tokenCache,
                                          Time time,
                                          LogContext logContext) {
+        // 配置
         Map<String, Object> configs = channelBuilderConfigs(config, listenerName);
 
         ChannelBuilder channelBuilder;
@@ -148,12 +149,13 @@ public class ChannelBuilders {
                         logContext);
                 break;
             case PLAINTEXT:
+                // 纯文本
                 channelBuilder = new PlaintextChannelBuilder(listenerName);
                 break;
             default:
                 throw new IllegalArgumentException("Unexpected securityProtocol " + securityProtocol);
         }
-
+        // 指定配置
         channelBuilder.configure(configs);
         return channelBuilder;
     }

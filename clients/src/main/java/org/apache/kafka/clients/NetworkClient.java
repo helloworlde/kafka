@@ -69,8 +69,10 @@ import java.util.stream.Collectors;
 /**
  * A network client for asynchronous request/response network i/o. This is an internal class used to implement the
  * user-facing producer and consumer clients.
+ * 用于异步请求和响应的网络 IO 客户端，用于生产者和消费者客户端的内部类
  * <p>
  * This class is not thread-safe!
+ * 线程不安全
  */
 public class NetworkClient implements KafkaClient {
 

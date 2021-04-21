@@ -318,6 +318,22 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 Time.SYSTEM);
     }
 
+    /**
+     * 1. 初始化配置
+     * 2. 初始化日志和监控
+     * 3. 初始化拦截器、事务管理器、消息累加器
+     * 4. 解析地址、初始化元数据
+     * 5. 初始化发送消息任务
+     * 6. 创建 IO 线程并启动
+     *
+     * @param configs         配置
+     * @param keySerializer   key 序列化
+     * @param valueSerializer value 序列化
+     * @param metadata        元数据
+     * @param kafkaClient     客户端
+     * @param interceptors    拦截器
+     * @param time            时间
+     */
     // visible for testing
     @SuppressWarnings("unchecked")
     KafkaProducer(Map<String, Object> configs,
@@ -442,10 +458,10 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 this.metadata.bootstrap(addresses);
             }
             this.errors = this.metrics.sensor("errors");
-            // 创建发送消息
+            // 创建发送消息任务
             this.sender = newSender(logContext, kafkaClient, this.metadata);
             String ioThreadName = NETWORK_THREAD_PREFIX + " | " + clientId;
-            // 创建线程并启动
+            // 创建 daemon 线程并启动
             this.ioThread = new KafkaThread(ioThreadName, this.sender, true);
             this.ioThread.start();
             config.logUnused();
@@ -469,11 +485,16 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      */
     // visible for testing
     Sender newSender(LogContext logContext, KafkaClient kafkaClient, ProducerMetadata metadata) {
+        // 客户端在阻塞之前将在单个连接上发送的未确认请求的最大数量
         int maxInflightRequests = configureInflightRequests(producerConfig);
+        // 请求超时时间
         int requestTimeoutMs = producerConfig.getInt(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG);
+        // 创建 ChannelBuilder
         ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(producerConfig, time, logContext);
+        // 统计
         ProducerMetrics metricsRegistry = new ProducerMetrics(this.metrics);
         Sensor throttleTimeSensor = Sender.throttleTimeSensor(metricsRegistry.senderMetrics);
+        // 创建 KafkaClient
         KafkaClient client = kafkaClient != null ? kafkaClient : new NetworkClient(
                 new Selector(producerConfig.getLong(ProducerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG),
                         this.metrics, time, "producer", channelBuilder, logContext),
@@ -493,7 +514,9 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 apiVersions,
                 throttleTimeSensor,
                 logContext);
+        // Ack 配置
         short acks = configureAcks(producerConfig, log);
+        // 创建发送任务
         return new Sender(logContext,
                 client,
                 metadata,
@@ -577,10 +600,16 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         return config.getInt(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
     }
 
+    /**
+     * 配置 ACK
+     * @param config
+     * @param log
+     * @return
+     */
     private static short configureAcks(ProducerConfig config, Logger log) {
         boolean userConfiguredAcks = config.originals().containsKey(ProducerConfig.ACKS_CONFIG);
         short acks = Short.parseShort(config.getString(ProducerConfig.ACKS_CONFIG));
-
+        // 开启了幂等就必须设置 ACK 为 all
         if (config.idempotenceEnabled()) {
             if (!userConfiguredAcks)
                 log.info("Overriding the default {} to all since idempotence is enabled.", ProducerConfig.ACKS_CONFIG);

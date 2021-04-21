@@ -92,12 +92,13 @@ public final class ClientUtils {
 
     /**
      * Create a new channel builder from the provided configuration.
+     * 根据提供的配置创建 Channel Builder
      *
-     * @param config client configs
-     * @param time the time implementation
-     * @param logContext the logging context
-     *
+     * @param config     client configs 客户端配置
+     * @param time       the time implementation 时间
+     * @param logContext the logging context 日志上下文
      * @return configured ChannelBuilder based on the configs.
+     * 基于给定配置的 ChannelBuilder
      */
     public static ChannelBuilder createChannelBuilder(AbstractConfig config, Time time, LogContext logContext) {
         SecurityProtocol securityProtocol = SecurityProtocol.forName(config.getString(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG));

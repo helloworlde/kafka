@@ -65,6 +65,7 @@ import static org.apache.kafka.common.record.RecordBatch.NO_TIMESTAMP;
 /**
  * The background thread that handles the sending of produce requests to the Kafka cluster. This thread makes metadata
  * requests to renew its view of the cluster and then sends produce requests to the appropriate nodes.
+ * 处理生产者发送消息请求到 Kafka 集群的后台线程，该线程发出元数据请求以更新其对群集的视图，然后将生产请求发送到适当的节点
  */
 public class Sender implements Runnable {
 
