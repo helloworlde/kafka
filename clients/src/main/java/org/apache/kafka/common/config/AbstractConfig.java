@@ -18,11 +18,11 @@ package org.apache.kafka.common.config;
 
 import org.apache.kafka.common.Configurable;
 import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.config.provider.ConfigProvider;
 import org.apache.kafka.common.config.types.Password;
 import org.apache.kafka.common.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.apache.kafka.common.config.provider.ConfigProvider;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -103,17 +103,21 @@ public class AbstractConfig {
         for (Map.Entry<?, ?> entry : originals.entrySet())
             if (!(entry.getKey() instanceof String))
                 throw new ConfigException(entry.getKey().toString(), entry.getValue(), "Key must be a string.");
-
+        // Key Value 转为 String
         this.originals = resolveConfigVariables(configProviderProps, (Map<String, Object>) originals);
+        // 初始化所有配置
         this.values = definition.parse(this.originals);
         this.used = Collections.synchronizedSet(new HashSet<>());
+        // 设置覆盖默认值的配置
         Map<String, Object> configUpdates = postProcessParsedConfig(Collections.unmodifiableMap(this.values));
         for (Map.Entry<String, Object> update : configUpdates.entrySet()) {
             this.values.put(update.getKey(), update.getValue());
         }
+        // 再次解析验证
         definition.parse(this.values);
         this.definition = definition;
         if (doLog)
+            // 将配置打印到日志中
             logAll();
     }
 
@@ -453,6 +457,12 @@ public class AbstractConfig {
         return objects;
     }
 
+    /**
+     * 将 Map 中的 Key 和 Value 都转为 String
+     *
+     * @param configMap
+     * @return
+     */
     private Map<String, String> extractPotentialVariables(Map<?, ?>  configMap) {
         // Variables are tuples of the form "${providerName:[path:]key}". From the configMap we extract the subset of configs with string
         // values as potential variables.
@@ -469,7 +479,7 @@ public class AbstractConfig {
      * Instantiates given list of config providers and fetches the actual values of config variables from the config providers.
      * returns a map of config key and resolved values.
      * @param configProviderProps The map of config provider configs
-     * @param originals The map of raw configs.
+     * @param originals The map of raw configs. 用户自定义的配置
      * @return map of resolved config variable.
      */
     @SuppressWarnings("unchecked")
@@ -478,6 +488,7 @@ public class AbstractConfig {
         Map<String, ?> configProperties;
         Map<String, Object> resolvedOriginals = new HashMap<>();
         // As variable configs are strings, parse the originals and obtain the potential variable configs.
+        // 将 Key Value 都转为 String
         Map<String, String> indirectVariables = extractPotentialVariables(originals);
 
         resolvedOriginals.putAll(originals);

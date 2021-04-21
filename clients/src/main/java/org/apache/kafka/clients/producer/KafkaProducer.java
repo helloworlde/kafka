@@ -421,6 +421,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             this.compressionType = CompressionType.forName(config.getString(ProducerConfig.COMPRESSION_TYPE_CONFIG));
 
             this.maxBlockTimeMs = config.getLong(ProducerConfig.MAX_BLOCK_MS_CONFIG);
+            // 投递超时时间
             int deliveryTimeoutMs = configureDeliveryTimeout(config, log);
 
             this.apiVersions = new ApiVersions();
@@ -440,7 +441,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     transactionManager,
                     new BufferPool(this.totalMemorySize, config.getInt(ProducerConfig.BATCH_SIZE_CONFIG), metrics, time, PRODUCER_METRIC_GROUP_NAME));
 
-            // 解析地址
+            // 解析 Bootstrap Server 的地址
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(
                     config.getList(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG),
                     config.getString(ProducerConfig.CLIENT_DNS_LOOKUP_CONFIG));
@@ -537,10 +538,21 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         return (int) Math.min(config.getLong(ProducerConfig.LINGER_MS_CONFIG), Integer.MAX_VALUE);
     }
 
+    /**
+     * 配置投递超时时间
+     *
+     * @param config
+     * @param log
+     * @return
+     */
     private static int configureDeliveryTimeout(ProducerConfig config, Logger log) {
+        // 配置的投递超时时间
         int deliveryTimeoutMs = config.getInt(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG);
+        // 批量发送等待时间
         int lingerMs = lingerMs(config);
+        // 请求超时时间
         int requestTimeoutMs = config.getInt(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG);
+        // 超时时间+批量发送等待时间
         int lingerAndRequestTimeoutMs = (int) Math.min((long) lingerMs + requestTimeoutMs, Integer.MAX_VALUE);
 
         if (deliveryTimeoutMs < lingerAndRequestTimeoutMs) {
