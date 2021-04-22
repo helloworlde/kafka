@@ -16,15 +16,15 @@
  */
 package org.apache.kafka.clients.producer;
 
+import org.apache.kafka.common.Cluster;
+import org.apache.kafka.common.PartitionInfo;
+import org.apache.kafka.common.utils.Utils;
+
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import org.apache.kafka.common.Cluster;
-import org.apache.kafka.common.PartitionInfo;
-import org.apache.kafka.common.utils.Utils;
 
 /**
  * The "Round-Robin" partitioner
@@ -41,25 +41,31 @@ public class RoundRobinPartitioner implements Partitioner {
 
     /**
      * Compute the partition for the given record.
+     * 计算所给消息的分区
      *
-     * @param topic The topic name
-     * @param key The key to partition on (or null if no key)
-     * @param keyBytes serialized key to partition on (or null if no key)
-     * @param value The value to partition on or null
+     * @param topic      The topic name
+     * @param key        The key to partition on (or null if no key)
+     * @param keyBytes   serialized key to partition on (or null if no key)
+     * @param value      The value to partition on or null
      * @param valueBytes serialized value to partition on or null
-     * @param cluster The current cluster metadata
+     * @param cluster    The current cluster metadata
      */
     @Override
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
+        // 获取 Topic 的 Partition
         List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
+        // Partition 数量
         int numPartitions = partitions.size();
         int nextValue = nextValue(topic);
+        // 获取可用的 partition
         List<PartitionInfo> availablePartitions = cluster.availablePartitionsForTopic(topic);
         if (!availablePartitions.isEmpty()) {
+            // 获取下一个 Partition
             int part = Utils.toPositive(nextValue) % availablePartitions.size();
             return availablePartitions.get(part).partition();
         } else {
             // no partitions are available, give a non-available partition
+            // 返回一个不可用的 Partition
             return Utils.toPositive(nextValue) % numPartitions;
         }
     }

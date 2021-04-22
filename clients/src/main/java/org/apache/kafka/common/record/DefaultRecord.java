@@ -175,6 +175,7 @@ public class DefaultRecord implements Record {
 
     /**
      * Write the record to `out` and return its size.
+     * 将消息写入输出流中
      */
     public static int writeTo(DataOutputStream out,
                               int offsetDelta,
