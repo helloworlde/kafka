@@ -385,12 +385,14 @@ public class Selector implements Selectable, AutoCloseable {
      */
     public void send(Send send) {
         String connectionId = send.destination();
+        // 获取 Channel
         KafkaChannel channel = openOrClosingChannelOrFail(connectionId);
         if (closingChannels.containsKey(connectionId)) {
             // ensure notification via `disconnected`, leave channel in the state in which closing was triggered
             this.failedSends.add(connectionId);
         } else {
             try {
+                // 发送
                 channel.setSend(send);
             } catch (Exception e) {
                 // update the state for consistency, the channel will be discarded after `close`

@@ -297,6 +297,7 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Begin connecting to the given node, return true if we are already connected and ready to send to that node.
+     * 开始连接给定的节点，如果连接成功并且可以发送数据，则返回 true
      *
      * @param node The node to check
      * @param now The current timestamp
@@ -307,9 +308,11 @@ public class NetworkClient implements KafkaClient {
         if (node.isEmpty())
             throw new IllegalArgumentException("Cannot connect to empty node " + node);
 
+        // 是否 ready，取决于 metadata 最后更新时间和 NIO 连接状态
         if (isReady(node, now))
             return true;
 
+        // 检查是否可以连接
         if (connectionStates.canConnect(node.idString(), now))
             // if we are interested in sending to a node and we don't have a connection to it, initiate one
             initiateConnect(node, now);
@@ -457,6 +460,8 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Queue up the given request for sending. Requests can only be sent out to ready nodes.
+     * 将所给的请求加入发送队列，请求只能被发送给 ready 的节点
+     *
      * @param request The request
      * @param now The current timestamp
      */
@@ -474,6 +479,7 @@ public class NetworkClient implements KafkaClient {
     private void doSend(ClientRequest clientRequest, boolean isInternalRequest, long now) {
         ensureActive();
         String nodeId = clientRequest.destination();
+        // 检查是否可以发送请求
         if (!isInternalRequest) {
             // If this request came from outside the NetworkClient, validate
             // that we can send data.  If the request is internal, we trust
@@ -502,6 +508,7 @@ public class NetworkClient implements KafkaClient {
             }
             // The call to build may also throw UnsupportedVersionException, if there are essential
             // fields that cannot be represented in the chosen version.
+            // 发送
             doSend(clientRequest, isInternalRequest, now, builder.build(version));
         } catch (UnsupportedVersionException unsupportedVersionException) {
             // If the version is not supported, skip sending the request over the wire.
@@ -519,6 +526,13 @@ public class NetworkClient implements KafkaClient {
         }
     }
 
+    /**
+     * 发送请求
+     * @param clientRequest
+     * @param isInternalRequest
+     * @param now
+     * @param request
+     */
     private void doSend(ClientRequest clientRequest, boolean isInternalRequest, long now, AbstractRequest request) {
         String destination = clientRequest.destination();
         RequestHeader header = clientRequest.makeHeader(request.version());
@@ -535,17 +549,20 @@ public class NetworkClient implements KafkaClient {
                 send,
                 now);
         this.inFlightRequests.add(inFlightRequest);
+        // 发送给 NIO
         selector.send(send);
     }
 
     /**
      * Do actual reads and writes to sockets.
+     * 真正对 Socket 执行读写操作
      *
      * @param timeout The maximum amount of time to wait (in ms) for responses if there are none immediately,
      *                must be non-negative. The actual timeout will be the minimum of timeout, request timeout and
      *                metadata timeout
-     * @param now The current time in milliseconds
+     * @param now     The current time in milliseconds
      * @return The list of responses received
+     * 接收到的响应集合
      */
     @Override
     public List<ClientResponse> poll(long timeout, long now) {
@@ -996,6 +1013,7 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Initiate a connection to the given node
+     * 连接指定的节点
      * @param node the node to connect to
      * @param now current time in epoch milliseconds
      */
@@ -1005,6 +1023,7 @@ public class NetworkClient implements KafkaClient {
             connectionStates.connecting(nodeConnectionId, now, node.host(), clientDnsLookup);
             InetAddress address = connectionStates.currentAddress(nodeConnectionId);
             log.debug("Initiating connection to node {} using address {}", node, address);
+            // 建立连接
             selector.connect(nodeConnectionId,
                     new InetSocketAddress(address, node.port()),
                     this.socketSendBuffer,

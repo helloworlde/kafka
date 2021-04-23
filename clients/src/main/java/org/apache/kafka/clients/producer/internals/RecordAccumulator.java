@@ -311,6 +311,7 @@ public final class RecordAccumulator {
 
     /**
      * Get a list of batches which have been sitting in the accumulator too long and need to be expired.
+     * 获取在计算器中等待太久的需要过期的批次
      */
     public List<ProducerBatch> expiredBatches(long now) {
         List<ProducerBatch> expiredBatches = new ArrayList<>();
@@ -439,6 +440,8 @@ public final class RecordAccumulator {
      * Get a list of nodes whose partitions are ready to be sent, and the earliest time at which any non-sendable
      * partition will be ready; Also return the flag for whether there are any unknown leaders for the accumulated
      * partition batches.
+     * 获取 Partition 可以发送消息的 Node 的集合，以及不可以发送的最早时间，同时返回 Partition 是否有未知的 leader
+     *
      * <p>
      * A destination node is ready to send data if:
      * <ol>
@@ -470,21 +473,27 @@ public final class RecordAccumulator {
                 ProducerBatch batch = deque.peekFirst();
                 if (batch != null) {
                     TopicPartition part = entry.getKey();
+                    // 获取 leader 的 Partition
                     Node leader = cluster.leaderFor(part);
                     if (leader == null) {
                         // This is a partition for which leader is not known, but messages are available to send.
                         // Note that entries are currently not removed from batches when deque is empty.
                         unknownLeaderTopics.add(part.topic());
                     } else if (!readyNodes.contains(leader) && !isMuted(part)) {
+                        // 如果 leader 不是 ready 或者没有被静音
                         long waitedTimeMs = batch.waitedTimeMs(nowMs);
                         boolean backingOff = batch.attempts() > 0 && waitedTimeMs < retryBackoffMs;
                         long timeToWaitMs = backingOff ? retryBackoffMs : lingerMs;
                         boolean full = deque.size() > 1 || batch.isFull();
                         boolean expired = waitedTimeMs >= timeToWaitMs;
+                        // 如果队列已满、超过等待期限、资源耗尽、关闭、强制发送
                         boolean sendable = full || expired || exhausted || closed || flushInProgress();
+                        // 如果上述情况，且没有退避
                         if (sendable && !backingOff) {
+                            // 将 leader 节点加入 ready 节点
                             readyNodes.add(leader);
                         } else {
+                            // 不满足条件，则等待
                             long timeLeftMs = Math.max(timeToWaitMs - waitedTimeMs, 0);
                             // Note that this results in a conservative estimate since an un-sendable partition may have
                             // a leader that will later be found to have sendable data. However, this is good enough
@@ -550,27 +559,35 @@ public final class RecordAccumulator {
         return false;
     }
 
+    /**
+     * 检查批次，修改批次状态，返回所有可以发送的批次
+     */
     private List<ProducerBatch> drainBatchesForOneNode(Cluster cluster, Node node, int maxSize, long now) {
         int size = 0;
         List<PartitionInfo> parts = cluster.partitionsForNode(node.id());
         List<ProducerBatch> ready = new ArrayList<>();
         /* to make starvation less likely this loop doesn't start at 0 */
+        // 为了避免饥饿，不从 0 开始
         int start = drainIndex = drainIndex % parts.size();
         do {
+            // 发送的 Partition
             PartitionInfo part = parts.get(drainIndex);
             TopicPartition tp = new TopicPartition(part.topic(), part.partition());
             this.drainIndex = (this.drainIndex + 1) % parts.size();
 
             // Only proceed if the partition has no in-flight batches.
+            // 如果 Partition 被静音了，则跳过
             if (isMuted(tp))
                 continue;
-
+            // 获取 Partition 的 队列
             Deque<ProducerBatch> deque = getDeque(tp);
+            // 如果队列中是 null，则跳过
             if (deque == null)
                 continue;
 
             synchronized (deque) {
                 // invariant: !isMuted(tp,now) && deque != null
+                // 从队列中获取数据，如果队列头是 null，则跳过
                 ProducerBatch first = deque.peekFirst();
                 if (first == null)
                     continue;
@@ -578,9 +595,10 @@ public final class RecordAccumulator {
                 // first != null
                 boolean backoff = first.attempts() > 0 && first.waitedTimeMs(now) < retryBackoffMs;
                 // Only drain the batch if it is not during backoff period.
+                // 如果退避则跳过
                 if (backoff)
                     continue;
-
+                // 超过消息大小限制则退出循环
                 if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
                     // there is a rare case that a single batch size is larger than the request size due to
                     // compression; in this case we will still eventually send this batch in a single request
@@ -591,7 +609,7 @@ public final class RecordAccumulator {
 
                     boolean isTransactional = transactionManager != null && transactionManager.isTransactional();
                     ProducerIdAndEpoch producerIdAndEpoch =
-                        transactionManager != null ? transactionManager.producerIdAndEpoch() : null;
+                            transactionManager != null ? transactionManager.producerIdAndEpoch() : null;
                     ProducerBatch batch = deque.pollFirst();
                     if (producerIdAndEpoch != null && !batch.hasSequence()) {
                         // If the the producer id/epoch of the partition do not match the latest one
@@ -608,18 +626,22 @@ public final class RecordAccumulator {
                         // Additionally, we update the next sequence number bound for the partition, and also have
                         // the transaction manager track the batch so as to ensure that sequence ordering is maintained
                         // even if we receive out of order responses.
+                        // 更新批次状态
                         batch.setProducerState(producerIdAndEpoch, transactionManager.sequenceNumber(batch.topicPartition), isTransactional);
+                        // 增加事务序号
                         transactionManager.incrementSequenceNumber(batch.topicPartition, batch.recordCount);
                         log.debug("Assigned producerId {} and producerEpoch {} to batch with base sequence " +
-                                "{} being sent to partition {}", producerIdAndEpoch.producerId,
-                            producerIdAndEpoch.epoch, batch.baseSequence(), tp);
+                                        "{} being sent to partition {}", producerIdAndEpoch.producerId,
+                                producerIdAndEpoch.epoch, batch.baseSequence(), tp);
 
                         transactionManager.addInFlightBatch(batch);
                     }
+                    // 关闭 batch 写入
                     batch.close();
                     size += batch.records().sizeInBytes();
+                    // 添加该批次
                     ready.add(batch);
-
+                    // 记录事件
                     batch.drained(now);
                 }
             }
@@ -630,20 +652,30 @@ public final class RecordAccumulator {
     /**
      * Drain all the data for the given nodes and collate them into a list of batches that will fit within the specified
      * size on a per-node basis. This method attempts to avoid choosing the same topic-node over and over.
+     * 将所有数据发送给指定节点，并将它们添加到批次集合中
+     * 这个方法试图避免一次又一次的选择相同的节点
      *
      * @param cluster The current cluster metadata
-     * @param nodes The list of node to drain
+     *                当前集群新
+     * @param nodes   The list of node to drain
+     *                要发送数据的节点列表
      * @param maxSize The maximum number of bytes to drain
-     * @param now The current unix time in milliseconds
+     *                发送的最大字节数
+     * @param now     The current unix time in milliseconds
+     *                当前时间戳
      * @return A list of {@link ProducerBatch} for each node specified with total size less than the requested maxSize.
+     * 每个节点发送的批次的集合
      */
     public Map<Integer, List<ProducerBatch>> drain(Cluster cluster, Set<Node> nodes, int maxSize, long now) {
         if (nodes.isEmpty())
             return Collections.emptyMap();
 
         Map<Integer, List<ProducerBatch>> batches = new HashMap<>();
+        // 遍历节点
         for (Node node : nodes) {
+            // 检查批次，修改批次状态，返回可以发送的批次
             List<ProducerBatch> ready = drainBatchesForOneNode(cluster, node, maxSize, now);
+            // 添加到集合中
             batches.put(node.id(), ready);
         }
         return batches;
