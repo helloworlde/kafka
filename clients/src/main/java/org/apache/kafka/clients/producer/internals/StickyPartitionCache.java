@@ -18,16 +18,17 @@ package org.apache.kafka.clients.producer.internals;
 
 import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.PartitionInfo;
+import org.apache.kafka.common.utils.Utils;
 
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentHashMap;
-import org.apache.kafka.common.utils.Utils;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * An internal class that implements a cache used for sticky partitioning behavior. The cache tracks the current sticky
- * partition for any given topic. This class should not be used externally. 
+ * partition for any given topic. This class should not be used externally.
+ * 实现了使用缓存进行黏性分区的内部类
  */
 public class StickyPartitionCache {
     private final ConcurrentMap<String, Integer> indexCache;

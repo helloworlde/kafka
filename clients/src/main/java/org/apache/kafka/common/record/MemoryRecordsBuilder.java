@@ -398,6 +398,7 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
     /**
      * Append a record and return its checksum for message format v0 and v1, or null for v2 and above.
+     * 追加消息，并返回响应的 checksum
      */
     private Long appendWithOffset(long offset, boolean isControlRecord, long timestamp, ByteBuffer key,
                                   ByteBuffer value, Header[] headers) {
@@ -685,6 +686,8 @@ public class MemoryRecordsBuilder implements AutoCloseable {
     /**
      * Append the record at the next consecutive offset. If no records have been appended yet, use the base
      * offset of this builder.
+     * 将消息追加到下一个连续的 offset，如果还没有追加消息，使用基础的 offset
+     *
      * @param record The record to add
      */
     public void append(LegacyRecord record) {
@@ -696,7 +699,9 @@ public class MemoryRecordsBuilder implements AutoCloseable {
         ensureOpenForRecordAppend();
         int offsetDelta = (int) (offset - baseOffset);
         long timestampDelta = timestamp - firstTimestamp;
+        // 将消息内容写入流中
         int sizeInBytes = DefaultRecord.writeTo(appendStream, offsetDelta, timestampDelta, key, value, headers);
+        // 更新 offset
         recordWritten(offset, timestamp, sizeInBytes);
     }
 
