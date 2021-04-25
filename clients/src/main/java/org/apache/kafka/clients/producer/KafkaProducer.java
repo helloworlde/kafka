@@ -1460,9 +1460,14 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             this.tp = tp;
         }
 
+        /**
+         * 执行拦截器和回调
+         */
         public void onCompletion(RecordMetadata metadata, Exception exception) {
             metadata = metadata != null ? metadata : new RecordMetadata(tp, -1, -1, RecordBatch.NO_TIMESTAMP, -1L, -1, -1);
+            // 拦截器
             this.interceptors.onAcknowledgement(metadata, exception);
+            // 用户添加回调
             if (this.userCallback != null)
                 this.userCallback.onCompletion(metadata, exception);
         }

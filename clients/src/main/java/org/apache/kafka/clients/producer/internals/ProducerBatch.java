@@ -17,7 +17,6 @@
 package org.apache.kafka.clients.producer.internals;
 
 import org.apache.kafka.clients.producer.Callback;
-import org.apache.kafka.common.utils.ProducerIdAndEpoch;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.RecordBatchTooLargeException;
@@ -32,6 +31,7 @@ import org.apache.kafka.common.record.Record;
 import org.apache.kafka.common.record.RecordBatch;
 import org.apache.kafka.common.record.TimestampType;
 import org.apache.kafka.common.requests.ProduceResponse;
+import org.apache.kafka.common.utils.ProducerIdAndEpoch;
 import org.apache.kafka.common.utils.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -178,30 +178,41 @@ public final class ProducerBatch {
      * try to set SUCCEEDED final state.
      * 2. If a transaction abortion happens or if the producer is closed forcefully, the final state is
      * ABORTED but again it could succeed if broker responds with a success.
-     *
+     * 完成批次的状态，一旦设置之后是不可变的，这个方法在每个批次可能会调用一次或两次，以下场景会调用两次：
+     * 1. 发送中的批次在接收到 Broker 的响应前已经过期；最终的状态是失败，但是可能在 Broker 是成功的，并且在第二次可能会尝试将状态
+     * 改为成功
+     * 2. 如果事务被取消或者生产者强制关闭，最终状态是取消，但是如果 broker 返回成功则成功
+     * <p>
+     * <p>
      * Attempted transitions from [FAILED | ABORTED] --> SUCCEEDED are logged.
      * Attempted transitions from one failure state to the same or a different failed state are ignored.
      * Attempted transitions from SUCCEEDED to the same or a failed state throw an exception.
      *
-     * @param baseOffset The base offset of the messages assigned by the server
+     * @param baseOffset    The base offset of the messages assigned by the server
+     *                      服务器分配的偏移
      * @param logAppendTime The log append time or -1 if CreateTime is being used
-     * @param exception The exception that occurred (or null if the request was successful)
+     *                      日志追加时间，如果使用的是 CreateTime 则是 -1
+     * @param exception     The exception that occurred (or null if the request was successful)
+     *                      异常
      * @return true if the batch was completed successfully and false if the batch was previously aborted
+     * 如果批次成功完成则返回 true，若干被取消则返回 false
      */
     public boolean done(long baseOffset, long logAppendTime, RuntimeException exception) {
         final FinalState tryFinalState = (exception == null) ? FinalState.SUCCEEDED : FinalState.FAILED;
-
+        // 最终状态
         if (tryFinalState == FinalState.SUCCEEDED) {
             log.trace("Successfully produced messages to {} with base offset {}.", topicPartition, baseOffset);
         } else {
             log.trace("Failed to produce messages to {} with base offset {}.", topicPartition, baseOffset, exception);
         }
-
+        // 修改最终状态
         if (this.finalState.compareAndSet(null, tryFinalState)) {
+            // 执行回调
             completeFutureAndFireCallbacks(baseOffset, logAppendTime, exception);
             return true;
         }
 
+        // 不是成功状态
         if (this.finalState.get() != FinalState.SUCCEEDED) {
             if (tryFinalState == FinalState.SUCCEEDED) {
                 // Log if a previously unsuccessful batch succeeded later on.
@@ -222,7 +233,7 @@ public final class ProducerBatch {
     private void completeFutureAndFireCallbacks(long baseOffset, long logAppendTime, RuntimeException exception) {
         // Set the future before invoking the callbacks as we rely on its state for the `onCompletion` call
         produceFuture.set(baseOffset, logAppendTime, exception);
-
+        // 遍历执行回调
         // execute callbacks
         for (Thunk thunk : thunks) {
             try {

@@ -568,6 +568,7 @@ public class NetworkClient implements KafkaClient {
     public List<ClientResponse> poll(long timeout, long now) {
         ensureActive();
 
+        // 如果有取消发送的，则执行取消
         if (!abortedSends.isEmpty()) {
             // If there are aborted sends because of unsupported version exceptions or disconnects,
             // handle them immediately without waiting for Selector#poll.
@@ -579,6 +580,7 @@ public class NetworkClient implements KafkaClient {
 
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
+            // 获取 NIO 的事件
             this.selector.poll(Utils.min(timeout, metadataTimeout, defaultRequestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);
@@ -586,19 +588,32 @@ public class NetworkClient implements KafkaClient {
 
         // process completed actions
         long updatedNow = this.time.milliseconds();
+        // 构建响应对象
         List<ClientResponse> responses = new ArrayList<>();
+        // 处理请求发送完成，如果没有响应则完成请求
         handleCompletedSends(responses, updatedNow);
+        // 处理接收完成并更新接收到响应的响应列表
         handleCompletedReceives(responses, updatedNow);
+        // 处理连接断开
         handleDisconnections(responses, updatedNow);
+        // 记录新创建的连接
         handleConnections();
+        // 处理初始化 ApiVersion 的请求
         handleInitiateApiVersionRequests(updatedNow);
+        // 处理超时的连接
         handleTimedOutConnections(responses, updatedNow);
+        // 处理超时的请求
         handleTimedOutRequests(responses, updatedNow);
+        // 请求完成回调
         completeResponses(responses);
 
         return responses;
     }
 
+    /**
+     * 请求完成回调
+     * @param responses
+     */
     private void completeResponses(List<ClientResponse> responses) {
         for (ClientResponse response : responses) {
             try {
@@ -811,6 +826,7 @@ public class NetworkClient implements KafkaClient {
     /**
      * Iterate over all the inflight requests and expire any requests that have exceeded the configured requestTimeout.
      * The connection to the node associated with the request will be terminated and will be treated as a disconnection.
+     * 处理超时的请求
      *
      * @param responses The list of responses to update
      * @param now The current time
@@ -835,6 +851,8 @@ public class NetworkClient implements KafkaClient {
      * stays at the ConnectionState.CONNECTING state longer than the timeout value,
      * as indicated by ClusterConnectionStates.NodeConnectionState.
      *
+     * 处理超时的连接
+     *
      * @param responses The list of responses to update
      * @param now The current time
      */
@@ -853,9 +871,10 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Handle any completed request send. In particular if no response is expected consider the request complete.
+     * 处理请求发送完成，如果没有响应则完成请求
      *
      * @param responses The list of responses to update
-     * @param now The current time
+     * @param now       The current time
      */
     private void handleCompletedSends(List<ClientResponse> responses, long now) {
         // if no response is expected then when the send is completed, return it
@@ -888,9 +907,10 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Handle any completed receives and update the response list with the responses received.
+     * 处理接收完成并更新接收到响应的响应列表
      *
      * @param responses The list of responses to update
-     * @param now The current time
+     * @param now       The current time
      */
     private void handleCompletedReceives(List<ClientResponse> responses, long now) {
         for (NetworkReceive receive : this.selector.completedReceives()) {
@@ -898,6 +918,7 @@ public class NetworkClient implements KafkaClient {
             InFlightRequest req = inFlightRequests.completeNext(source);
             Struct responseStruct = parseStructMaybeUpdateThrottleTimeMetrics(receive.payload(), req.header,
                 throttleTimeSensor, now);
+            // 解析响应
             AbstractResponse response = AbstractResponse.
                 parseResponse(req.header.apiKey(), responseStruct, req.header.apiVersion());
 
@@ -949,9 +970,10 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Handle any disconnected connections
+     * 处理连接断开
      *
      * @param responses The list of responses that completed with the disconnection
-     * @param now The current time
+     * @param now       The current time
      */
     private void handleDisconnections(List<ClientResponse> responses, long now) {
         for (Map.Entry<String, ChannelState> entry : this.selector.disconnected().entrySet()) {
@@ -963,6 +985,7 @@ public class NetworkClient implements KafkaClient {
 
     /**
      * Record any newly completed connections
+     * 记录新创建的连接
      */
     private void handleConnections() {
         for (String node : this.selector.connected()) {
@@ -981,6 +1004,10 @@ public class NetworkClient implements KafkaClient {
         }
     }
 
+    /**
+     * 处理初始化 ApiVersion 的请求
+     * @param now
+     */
     private void handleInitiateApiVersionRequests(long now) {
         Iterator<Map.Entry<String, ApiVersionsRequest.Builder>> iter = nodesNeedingApiVersionsFetch.entrySet().iterator();
         while (iter.hasNext()) {

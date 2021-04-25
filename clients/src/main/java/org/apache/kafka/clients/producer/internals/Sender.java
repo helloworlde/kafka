@@ -566,16 +566,19 @@ public class Sender implements Runnable {
 
     /**
      * Handle a produce response
+     * 处理发送消息的响应
      */
     private void handleProduceResponse(ClientResponse response, Map<TopicPartition, ProducerBatch> batches, long now) {
         RequestHeader requestHeader = response.requestHeader();
         int correlationId = requestHeader.correlationId();
+        // 连接断开
         if (response.wasDisconnected()) {
             log.trace("Cancelled request with header {} due to node {} being disconnected",
                 requestHeader, response.destination());
             for (ProducerBatch batch : batches.values())
                 completeBatch(batch, new ProduceResponse.PartitionResponse(Errors.NETWORK_EXCEPTION), correlationId, now);
         } else if (response.versionMismatch() != null) {
+            //  版本不匹配
             log.warn("Cancelled request {} due to a version mismatch with node {}",
                     response, response.destination(), response.versionMismatch());
             for (ProducerBatch batch : batches.values())
@@ -583,8 +586,10 @@ public class Sender implements Runnable {
         } else {
             log.trace("Received produce response from node {} with correlation id {}", response.destination(), correlationId);
             // if we have a response, parse it
+            // 如果请求有响应，则解析响应
             if (response.hasResponse()) {
                 ProduceResponse produceResponse = (ProduceResponse) response.responseBody();
+                // 遍历批次，完成
                 for (Map.Entry<TopicPartition, ProduceResponse.PartitionResponse> entry : produceResponse.responses().entrySet()) {
                     TopicPartition tp = entry.getKey();
                     ProduceResponse.PartitionResponse partResp = entry.getValue();
@@ -594,6 +599,7 @@ public class Sender implements Runnable {
                 this.sensors.recordLatency(response.destination(), response.requestLatencyMs());
             } else {
                 // this is the acks = 0 case, just complete all requests
+                // 如果 acks 是 0， 即不需要确认，则直接完成所有请求
                 for (ProducerBatch batch : batches.values()) {
                     completeBatch(batch, new ProduceResponse.PartitionResponse(Errors.NONE), correlationId, now);
                 }
@@ -603,16 +609,22 @@ public class Sender implements Runnable {
 
     /**
      * Complete or retry the given batch of records.
+     * 完成或者重试给定的消息批次
      *
-     * @param batch The record batch
-     * @param response The produce response
+     * @param batch         The record batch
+     *                      消息批次
+     * @param response      The produce response
+     *                      响应
      * @param correlationId The correlation id for the request
-     * @param now The current POSIX timestamp in milliseconds
+     *                      请求相关的 ID
+     * @param now           The current POSIX timestamp in milliseconds
+     *                      当前的时间
      */
     private void completeBatch(ProducerBatch batch, ProduceResponse.PartitionResponse response, long correlationId,
                                long now) {
         Errors error = response.error;
 
+        // 如果请求批次太大，则拆分
         if (error == Errors.MESSAGE_TOO_LARGE && batch.recordCount > 1 && !batch.isDone() &&
                 (batch.magic() >= RecordBatch.MAGIC_VALUE_V2 || batch.isCompressed())) {
             // If the batch is too large, we split the batch and send the split batches again. We do not decrement
@@ -625,10 +637,13 @@ public class Sender implements Runnable {
                 error);
             if (transactionManager != null)
                 transactionManager.removeInFlightBatch(batch);
+            // 拆分批次
             this.accumulator.splitAndReenqueue(batch);
             maybeRemoveAndDeallocateBatch(batch);
             this.sensors.recordBatchSplit();
         } else if (error != Errors.NONE) {
+            // 有错误
+            // 判断是否可以重试
             if (canRetry(batch, response, now)) {
                 log.warn(
                     "Got error produce response with correlation id {} on topic-partition {}, retrying ({} attempts left). Error: {}",
@@ -636,8 +651,10 @@ public class Sender implements Runnable {
                     batch.topicPartition,
                     this.retries - batch.attempts() - 1,
                     error);
+                // 重新放入队列
                 reenqueueBatch(batch, now);
             } else if (error == Errors.DUPLICATE_SEQUENCE_NUMBER) {
+                // 消息重复
                 // If we have received a duplicate sequence error, it means that the sequence number has advanced beyond
                 // the sequence of the current batch, and we haven't retained batch metadata on the broker to return
                 // the correct offset and timestamp.
@@ -645,6 +662,7 @@ public class Sender implements Runnable {
                 // The only thing we can do is to return success to the user and not return a valid offset and timestamp.
                 completeBatch(batch, response);
             } else {
+                // 处理异常
                 final RuntimeException exception;
                 if (error == Errors.TOPIC_AUTHORIZATION_FAILED)
                     exception = new TopicAuthorizationException(Collections.singleton(batch.topicPartition.topic()));
@@ -657,6 +675,7 @@ public class Sender implements Runnable {
                 // thus it is not safe to reassign the sequence.
                 failBatch(batch, response, exception, batch.attempts() < this.retries);
             }
+            // 元数据无效或者 Topic 或 Partition 无效，更新元数据
             if (error.exception() instanceof InvalidMetadataException) {
                 if (error.exception() instanceof UnknownTopicOrPartitionException) {
                     log.warn("Received unknown topic or partition error in produce request on partition {}. The " +
@@ -669,25 +688,41 @@ public class Sender implements Runnable {
                 metadata.requestUpdate();
             }
         } else {
+            // 完成批次
             completeBatch(batch, response);
         }
 
         // Unmute the completed partition.
+        // 取消 Partition 静默
         if (guaranteeMessageOrder)
             this.accumulator.unmutePartition(batch.topicPartition);
     }
 
+    /**
+     * 将待重试的请求重试加入队列中
+     *
+     * @param batch
+     * @param currentTimeMs
+     */
     private void reenqueueBatch(ProducerBatch batch, long currentTimeMs) {
         this.accumulator.reenqueue(batch, currentTimeMs);
         maybeRemoveFromInflightBatches(batch);
         this.sensors.recordRetries(batch.topicPartition.topic(), batch.recordCount);
     }
 
+    /**
+     * 完成请求
+     *
+     * @param batch
+     * @param response
+     */
     private void completeBatch(ProducerBatch batch, ProduceResponse.PartitionResponse response) {
+        // 如果是事务，则完成事务
         if (transactionManager != null) {
             transactionManager.handleCompletedBatch(batch, response);
         }
 
+        // 完成批次
         if (batch.done(response.baseOffset, response.logAppendTime, null)) {
             maybeRemoveAndDeallocateBatch(batch);
         }
@@ -720,6 +755,8 @@ public class Sender implements Runnable {
      * We can retry a send if the error is transient and the number of attempts taken is fewer than the maximum allowed.
      * We can also retry OutOfOrderSequence exceptions for future batches, since if the first batch has failed, the
      * future batches are certain to fail with an OutOfOrderSequence exception.
+     *
+     * 检查消息是否可以重试
      */
     private boolean canRetry(ProducerBatch batch, ProduceResponse.PartitionResponse response, long now) {
         return !batch.hasReachedDeliveryTimeout(accumulator.getDeliveryTimeoutMs(), now) &&
