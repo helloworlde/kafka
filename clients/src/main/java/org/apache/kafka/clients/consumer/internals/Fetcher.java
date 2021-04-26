@@ -111,11 +111,14 @@ import static java.util.Collections.emptyList;
 
 /**
  * This class manages the fetching process with the brokers.
+ * 管理从 Broker 拉取消息
  * <p>
  * Thread-safety:
  * Requests and responses of Fetcher may be processed by different threads since heartbeat
  * thread may process responses. Other operations are single-threaded and invoked only from
  * the thread polling the consumer.
+ * 线程安全：
+ * Fetcher 的请求和响应可能会有不同的线程处理，心跳线程也可能处理响应，其他的操作仅由拉取消费的单个线程处理
  * <ul>
  *     <li>If a response handler accesses any shared state of the Fetcher (e.g. FetchSessionHandler),
  *     all access to that state must be synchronized on the Fetcher instance.</li>

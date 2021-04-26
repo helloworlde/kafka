@@ -83,6 +83,7 @@ import java.util.stream.Collectors;
 
 /**
  * This class manages the coordination process with the consumer coordinator.
+ * 管理消费组协调器的协调
  */
 public final class ConsumerCoordinator extends AbstractCoordinator {
     private final GroupRebalanceConfig rebalanceConfig;

@@ -648,6 +648,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
     /**
      * A consumer is instantiated by providing a set of key-value pairs as configuration, and a key and a value {@link Deserializer}.
+     * 消费者通过提供的一组键值对作为配置，还有 key 和 value 的反序列化方式进行初始化
      * <p>
      * Valid configuration strings are documented at {@link ConsumerConfig}.
      * <p>
@@ -665,12 +666,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                          Deserializer<V> valueDeserializer) {
         ConsumerConfig config = new ConsumerConfig(ConsumerConfig.appendDeserializerToConfig(configs, keyDeserializer, valueDeserializer));
         try {
+            // 重新平衡配置
             GroupRebalanceConfig groupRebalanceConfig = new GroupRebalanceConfig(config,
                     GroupRebalanceConfig.ProtocolType.CONSUMER);
 
             this.groupId = Optional.ofNullable(groupRebalanceConfig.groupId);
             this.clientId = config.getString(CommonClientConfigs.CLIENT_ID_CONFIG);
 
+            // 初始化日志
             LogContext logContext;
 
             // If group.instance.id is set, we will append it to the log context.
@@ -682,6 +685,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             }
 
             this.log = logContext.logger(getClass());
+            // 是否开启自动提交
             boolean enableAutoCommit = config.maybeOverrideEnableAutoCommit();
             groupId.ifPresent(groupIdStr -> {
                 if (groupIdStr.isEmpty()) {
@@ -699,9 +703,11 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             // load interceptors and make sure they get clientId
             Map<String, Object> userProvidedConfigs = config.originals();
             userProvidedConfigs.put(ConsumerConfig.CLIENT_ID_CONFIG, clientId);
+            // 初始化拦截器
             List<ConsumerInterceptor<K, V>> interceptorList = (List) (new ConsumerConfig(userProvidedConfigs, false)).getConfiguredInstances(ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG,
                     ConsumerInterceptor.class);
             this.interceptors = new ConsumerInterceptors<>(interceptorList);
+            // Key 反序列化方式
             if (keyDeserializer == null) {
                 this.keyDeserializer = config.getConfiguredInstance(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, Deserializer.class);
                 this.keyDeserializer.configure(config.originals(Collections.singletonMap(ConsumerConfig.CLIENT_ID_CONFIG, clientId)), true);
@@ -709,6 +715,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                 config.ignore(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG);
                 this.keyDeserializer = keyDeserializer;
             }
+            // Value 反序列化方式
             if (valueDeserializer == null) {
                 this.valueDeserializer = config.getConfiguredInstance(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, Deserializer.class);
                 this.valueDeserializer.configure(config.originals(Collections.singletonMap(ConsumerConfig.CLIENT_ID_CONFIG, clientId)), false);
@@ -716,28 +723,35 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                 config.ignore(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
                 this.valueDeserializer = valueDeserializer;
             }
+            // Offset 配置
             OffsetResetStrategy offsetResetStrategy = OffsetResetStrategy.valueOf(config.getString(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG).toUpperCase(Locale.ROOT));
             this.subscriptions = new SubscriptionState(logContext, offsetResetStrategy);
+            // 集群资源监听器
             ClusterResourceListeners clusterResourceListeners = configureClusterResourceListeners(keyDeserializer,
                     valueDeserializer, metrics.reporters(), interceptorList);
+            // 消费组元数据
             this.metadata = new ConsumerMetadata(retryBackoffMs,
                     config.getLong(ConsumerConfig.METADATA_MAX_AGE_CONFIG),
                     !config.getBoolean(ConsumerConfig.EXCLUDE_INTERNAL_TOPICS_CONFIG),
                     config.getBoolean(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG),
                     subscriptions, logContext, clusterResourceListeners);
+            // 解析 Server 地址
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(
                     config.getList(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG), config.getString(ConsumerConfig.CLIENT_DNS_LOOKUP_CONFIG));
             this.metadata.bootstrap(addresses);
             String metricGrpPrefix = "consumer";
-
+            // 监控
             FetcherMetricsRegistry metricsRegistry = new FetcherMetricsRegistry(Collections.singleton(CLIENT_ID_METRIC_TAG), metricGrpPrefix);
+            // Channel Builder
             ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config, time, logContext);
+            // 事务消息的隔离级别
             IsolationLevel isolationLevel = IsolationLevel.valueOf(
                     config.getString(ConsumerConfig.ISOLATION_LEVEL_CONFIG).toUpperCase(Locale.ROOT));
             Sensor throttleTimeSensor = Fetcher.throttleTimeSensor(metrics, metricsRegistry);
             int heartbeatIntervalMs = config.getInt(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG);
 
             ApiVersions apiVersions = new ApiVersions();
+            // 初始化 IO 连接
             NetworkClient netClient = new NetworkClient(
                     new Selector(config.getLong(ConsumerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG), metrics, time, metricGrpPrefix, channelBuilder, logContext),
                     this.metadata,
@@ -756,6 +770,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     apiVersions,
                     throttleTimeSensor,
                     logContext);
+            // 消费者网络连接
             this.client = new ConsumerNetworkClient(
                     logContext,
                     netClient,
@@ -764,10 +779,11 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     retryBackoffMs,
                     config.getInt(ConsumerConfig.REQUEST_TIMEOUT_MS_CONFIG),
                     heartbeatIntervalMs); //Will avoid blocking an extended period of time to prevent heartbeat thread starvation
-
+            // 消费组转让
             this.assignors = getAssignorInstances(config.getList(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG), config.originals());
 
             // no coordinator will be constructed for the default (null) group id
+            // 协调器
             this.coordinator = !groupId.isPresent() ? null :
                 new ConsumerCoordinator(groupRebalanceConfig,
                         logContext,
@@ -782,6 +798,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                         config.getInt(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG),
                         this.interceptors,
                         config.getBoolean(ConsumerConfig.THROW_ON_FETCH_STABLE_OFFSET_UNSUPPORTED));
+            // 初始化消息拉取
             this.fetcher = new Fetcher<>(
                     logContext,
                     this.client,
@@ -803,10 +820,11 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     this.requestTimeoutMs,
                     isolationLevel,
                     apiVersions);
-
+            // 统计
             this.kafkaConsumerMetrics = new KafkaConsumerMetrics(metrics, metricGrpPrefix);
 
             config.logUnused();
+            // JMX
             AppInfoParser.registerAppInfo(JMX_PREFIX, clientId, metrics, time.milliseconds());
             log.debug("Kafka consumer initialized");
         } catch (Throwable t) {

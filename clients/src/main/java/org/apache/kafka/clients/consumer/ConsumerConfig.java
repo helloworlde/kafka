@@ -591,6 +591,14 @@ public class ConsumerConfig extends AbstractConfig {
         return appendDeserializerToConfig(configs, keyDeserializer, valueDeserializer);
     }
 
+    /**
+     * 将反序列化方式添加到配置中
+     *
+     * @param configs
+     * @param keyDeserializer
+     * @param valueDeserializer
+     * @return
+     */
     static Map<String, Object> appendDeserializerToConfig(Map<String, Object> configs,
             Deserializer<?> keyDeserializer,
             Deserializer<?> valueDeserializer) {

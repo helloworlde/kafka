@@ -50,6 +50,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * Higher level consumer access to the network layer with basic support for request futures. This class
  * is thread-safe, but provides no synchronization for response callbacks. This guarantees that no locks
  * are held when they are invoked.
+ * <p>
+ * 用于请求的更高层级的消费组网络层，是线程安全的，但是提供非同步的响应回调，在调用锁时不会保留任何锁
  */
 public class ConsumerNetworkClient implements Closeable {
     private static final int MAX_POLL_TIMEOUT_MS = 5000;

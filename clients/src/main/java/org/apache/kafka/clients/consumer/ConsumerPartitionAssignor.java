@@ -33,6 +33,9 @@ import org.apache.kafka.common.TopicPartition;
  * propagates the subscriptions of all members to it. Then {@link #assign(Cluster, GroupSubscription)} is called
  * to perform the assignment and the results are forwarded back to each respective members
  *
+ * 定义用于消费者转让 Partition 的接口消费组定于 topic，然后将其订阅转发给充当 Kafka 的 Broker，充当协调器；
+ * 协调器选择其中一个执行分组作业，传播给所有的订阅成员，然后调用 #assign 方法执行分组并将结果转发给各自的成员
+ *
  * In some cases, it is useful to forward additional metadata to the assignor in order to make
  * assignment decisions. For this, you can override {@link #subscriptionUserData(Set)} and provide custom
  * userData in the returned Subscription. For example, to have a rack-aware assignor, an implementation
