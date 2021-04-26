@@ -42,6 +42,7 @@ public class ConsumerInterceptors<K, V> implements Closeable {
 
     /**
      * This is called when the records are about to be returned to the user.
+     * 执行拦截器
      * <p>
      * This method calls {@link ConsumerInterceptor#onConsume(ConsumerRecords)} for each
      * interceptor. Records returned from each interceptor get passed to onConsume() of the next interceptor

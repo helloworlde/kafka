@@ -160,9 +160,18 @@ public class SubscriptionState {
             throw new IllegalStateException(SUBSCRIPTION_EXCEPTION_MESSAGE);
     }
 
+    /**
+     * 订阅
+     * @param topics
+     * @param listener
+     * @return
+     */
     public synchronized boolean subscribe(Set<String> topics, ConsumerRebalanceListener listener) {
+        // 注册重新平衡监听器
         registerRebalanceListener(listener);
+        // 设置订阅类型
         setSubscriptionType(SubscriptionType.AUTO_TOPICS);
+        // 修改订阅的 Topic
         return changeSubscription(topics);
     }
 
@@ -239,6 +248,7 @@ public class SubscriptionState {
     }
 
     /**
+     * 检查分配和实际是否一致
      * @return true if assignments matches subscription, otherwise false
      */
     public synchronized boolean checkAssignmentMatchedSubscription(Collection<TopicPartition> assignments) {
@@ -266,6 +276,7 @@ public class SubscriptionState {
     /**
      * Change the assignment to the specified partitions returned from the coordinator, note this is
      * different from {@link #assignFromUser(Set)} which directly set the assignment from user inputs.
+     * 修改协调器分配的指定的 Partition
      */
     public synchronized void assignFromSubscribed(Collection<TopicPartition> assignments) {
         if (!this.hasAutoAssignedPartitions())

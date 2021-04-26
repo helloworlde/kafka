@@ -206,6 +206,8 @@ public class ConsumerNetworkClient implements Closeable {
 
     /**
      * Block until the provided request future request has finished or the timeout has expired.
+     * 阻塞直到提供的 future 的请求完成或者超时
+     *
      * @param future The request future to wait for
      * @param timer Timer bounding how long this method can block
      * @return true if the future is done, false otherwise
@@ -312,6 +314,9 @@ public class ConsumerNetworkClient implements Closeable {
      * Poll for network IO in best-effort only trying to transmit the ready-to-send request
      * Do not check any pending requests or metadata errors so that no exception should ever
      * be thrown, also no wakeups be triggered and no interrupted exception either.
+     *
+     * 仅尝试传输即用发送请求，才能尽最大努力为网络 IO 进行投票不要检查任何待处理的请求或元数据错误，因此不应有任何例外
+     * 被抛出，也没有唤醒被触发，也没有中断的例外。
      */
     public void transmitSends() {
         Timer timer = time.timer(0);
@@ -321,6 +326,7 @@ public class ConsumerNetworkClient implements Closeable {
         lock.lock();
         try {
             // send all the requests we can send now
+            // 尝试发送所有请求
             trySend(timer.currentTimeMs());
 
             client.poll(0, timer.currentTimeMs());
@@ -486,6 +492,9 @@ public class ConsumerNetworkClient implements Closeable {
     }
 
     // Visible for testing
+    /**
+     * 遍历待发送的请求，发送请求
+     */
     long trySend(long now) {
         long pollDelayMs = maxPollTimeoutMs;
 

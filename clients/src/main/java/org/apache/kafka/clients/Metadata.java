@@ -245,6 +245,7 @@ public class Metadata implements Closeable {
     /**
      * Updates the cluster metadata. If topic expiry is enabled, expiry time
      * is set for topics if required and expired topics are removed from the metadata.
+     * 更新集群元数据，如果 topic 过期开启了，每次都会将过期的 Topic 移除
      *
      * @param requestVersion The request version corresponding to the update response, as provided by
      *     {@link #newMetadataRequestAndVersion(long)}.
@@ -278,6 +279,7 @@ public class Metadata implements Closeable {
         if (!Objects.equals(previousClusterId, newClusterId)) {
             log.info("Cluster ID: {}", newClusterId);
         }
+        // 通知监听器更新
         clusterResourceListeners.onUpdate(cache.clusterResource());
 
         log.debug("Updated cluster metadata updateVersion {} to {}", this.updateVersion, this.cache);
@@ -305,6 +307,7 @@ public class Metadata implements Closeable {
 
     /**
      * Transform a MetadataResponse into a new MetadataCache instance.
+     * 将  MetadataResponse 转为 MetadataCache 实例
      */
     private MetadataCache handleMetadataResponse(MetadataResponse metadataResponse, boolean isPartialUpdate, long nowMs) {
         // All encountered topics.

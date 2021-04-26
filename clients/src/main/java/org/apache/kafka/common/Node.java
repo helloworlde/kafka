@@ -20,6 +20,7 @@ import java.util.Objects;
 
 /**
  * Information about a Kafka node
+ * Kafka 节点信息
  */
 public class Node {
 

@@ -941,14 +941,22 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * <li>A new member is added to the consumer group
      * </ul>
      * <p>
+     * 作消费组管理的一部分，消费组会跟踪属于特定消费组的集合，如果有以下场景，会触发重新平衡操作
+     * 1. 任何订阅的 Topic 的 Partition 数量发生变化
+     * 2. 订阅的 Topic 创建或被删除
+     * 3. 一个存在的消费者被关闭或者失败
+     * 4. 有新的消费组加入
      * When any of these events are triggered, the provided listener will be invoked first to indicate that
      * the consumer's assignment has been revoked, and then again when the new assignment has been received.
      * Note that rebalances will only occur during an active call to {@link #poll(Duration)}, so callbacks will
      * also only be invoked during that time.
+     * 一旦有其中任何一个事件被触发，会调用监听器表明消费组的分配被撤销，然后当接收到新的分配后重复；注意重新平衡只有在真正调用
+     * poll 时才会发生，所以回调也只会在这个时候执行
      *
      * The provided listener will immediately override any listener set in a previous call to subscribe.
      * It is guaranteed, however, that the partitions revoked/assigned through this interface are from topics
      * subscribed in this call. See {@link ConsumerRebalanceListener} for more details.
+     * 新的 listener 会立即覆盖之前订阅时提供的 Listener；但是可以保证通过接口分配的分区是来自订阅的主题的
      *
      * @param topics The list of topics to subscribe to
      * @param listener Non-null listener instance to get notifications on partition assignment/revocation for the
@@ -960,24 +968,31 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      */
     @Override
     public void subscribe(Collection<String> topics, ConsumerRebalanceListener listener) {
+        // 获取锁
         acquireAndEnsureOpen();
         try {
+            // 检查 GroupID
             maybeThrowInvalidGroupIdException();
             if (topics == null)
                 throw new IllegalArgumentException("Topic collection to subscribe to cannot be null");
             if (topics.isEmpty()) {
                 // treat subscribing to empty topic list as the same as unsubscribing
+                // 如果 topic 是空的， 则取消订阅
                 this.unsubscribe();
             } else {
+                // 检查 topic
                 for (String topic : topics) {
                     if (topic == null || topic.trim().isEmpty())
                         throw new IllegalArgumentException("Topic collection to subscribe to cannot contain null or empty topic");
                 }
 
+                // 检查转让人
                 throwIfNoAssignorsConfigured();
+                // 清除不属于分配主题的缓冲数据
                 fetcher.clearBufferedDataForUnassignedTopics(topics);
                 log.info("Subscribed to topic(s): {}", Utils.join(topics, ", "));
                 if (this.subscriptions.subscribe(new HashSet<>(topics), listener))
+                    // 要求更新 Topic 信息
                     metadata.requestUpdateForNewTopics();
             }
         } finally {
@@ -990,6 +1005,8 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * <b>Topic subscriptions are not incremental. This list will replace the current
      * assignment (if there is one).</b> It is not possible to combine topic subscription with group management
      * with manual partition assignment through {@link #assign(Collection)}.
+     * 定义所给的 Topic 集合，获取动态分配的 Partition
+     * Topic 订阅是不可增加的，这个集合会替换当前的分配（如果有的话），无法通过 assign 手动将 Topic 订阅和消费组管理合并
      *
      * If the given list of topics is empty, it is treated the same as {@link #unsubscribe()}.
      *
@@ -1143,35 +1160,37 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     /**
      * Fetch data for the topics or partitions specified using one of the subscribe/assign APIs. It is an error to not have
      * subscribed to any topics or partitions before polling for data.
+     * 从通过 subscribe 或者 assign 指定的 topic 中拉取数据，如果在拉取之前没有订阅 topic 或者 Partition，则会返回错误
+     *
      * <p>
      * On each poll, consumer will try to use the last consumed offset as the starting offset and fetch sequentially. The last
      * consumed offset can be manually set through {@link #seek(TopicPartition, long)} or automatically set as the last committed
      * offset for the subscribed list of partitions
-     *
+     * 每次拉取时，消费者都会使用最后一次消费的 offset 作为开始的 offset 依序拉取，最后消费的 offset 可以通过 seek 手动设置，或者自动使用
+     * Partition 中提交的最后一个 offset
      *
      * @param timeoutMs The time, in milliseconds, spent waiting in poll if data is not available in the buffer.
-     *            If 0, returns immediately with any records that are available currently in the buffer, else returns empty.
-     *            Must not be negative.
+     *                  If 0, returns immediately with any records that are available currently in the buffer, else returns empty.
+     *                  Must not be negative.
+     *                  超时时间
      * @return map of topic to records since the last fetch for the subscribed list of topics and partitions
-     *
      * @throws org.apache.kafka.clients.consumer.InvalidOffsetException if the offset for a partition or set of
-     *             partitions is undefined or out of range and no offset reset policy has been configured
-     * @throws org.apache.kafka.common.errors.WakeupException if {@link #wakeup()} is called before or while this
-     *             function is called
-     * @throws org.apache.kafka.common.errors.InterruptException if the calling thread is interrupted before or while
-     *             this function is called
-     * @throws org.apache.kafka.common.errors.AuthenticationException if authentication fails. See the exception for more details
-     * @throws org.apache.kafka.common.errors.AuthorizationException if caller lacks Read access to any of the subscribed
-     *             topics or to the configured groupId. See the exception for more details
-     * @throws org.apache.kafka.common.KafkaException for any other unrecoverable errors (e.g. invalid groupId or
-     *             session timeout, errors deserializing key/value pairs, or any new error cases in future versions)
-     * @throws java.lang.IllegalArgumentException if the timeout value is negative
-     * @throws java.lang.IllegalStateException if the consumer is not subscribed to any topics or manually assigned any
-     *             partitions to consume from
+     *                                                                  partitions is undefined or out of range and no offset reset policy has been configured
+     * @throws org.apache.kafka.common.errors.WakeupException           if {@link #wakeup()} is called before or while this
+     *                                                                  function is called
+     * @throws org.apache.kafka.common.errors.InterruptException        if the calling thread is interrupted before or while
+     *                                                                  this function is called
+     * @throws org.apache.kafka.common.errors.AuthenticationException   if authentication fails. See the exception for more details
+     * @throws org.apache.kafka.common.errors.AuthorizationException    if caller lacks Read access to any of the subscribed
+     *                                                                  topics or to the configured groupId. See the exception for more details
+     * @throws org.apache.kafka.common.KafkaException                   for any other unrecoverable errors (e.g. invalid groupId or
+     *                                                                  session timeout, errors deserializing key/value pairs, or any new error cases in future versions)
+     * @throws java.lang.IllegalArgumentException                       if the timeout value is negative
+     * @throws java.lang.IllegalStateException                          if the consumer is not subscribed to any topics or manually assigned any
+     *                                                                  partitions to consume from
      * @throws org.apache.kafka.common.errors.FencedInstanceIdException if this consumer instance gets fenced by broker.
-     *
      * @deprecated Since 2.0. Use {@link #poll(Duration)}, which does not block beyond the timeout awaiting partition
-     *             assignment. See <a href="https://cwiki.apache.org/confluence/x/5kiHB">KIP-266</a> for more information.
+     * assignment. See <a href="https://cwiki.apache.org/confluence/x/5kiHB">KIP-266</a> for more information.
      */
     @Deprecated
     @Override
@@ -1182,42 +1201,44 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     /**
      * Fetch data for the topics or partitions specified using one of the subscribe/assign APIs. It is an error to not have
      * subscribed to any topics or partitions before polling for data.
+     * 从通过 subscribe 或者 assign 指定的 topic 中拉取数据，如果在拉取之前没有订阅 topic 或者 Partition，则会返回错误
+     *
      * <p>
      * On each poll, consumer will try to use the last consumed offset as the starting offset and fetch sequentially. The last
      * consumed offset can be manually set through {@link #seek(TopicPartition, long)} or automatically set as the last committed
      * offset for the subscribed list of partitions
-     *
+     * 每次拉取时，消费者都会使用最后一次消费的 offset 作为开始的 offset 依序拉取，最后消费的 offset 可以通过 seek 手动设置，或者自动使用
+     * Partition 中提交的最后一个 offset
      * <p>
      * This method returns immediately if there are records available. Otherwise, it will await the passed timeout.
      * If the timeout expires, an empty record set will be returned. Note that this method may block beyond the
      * timeout in order to execute custom {@link ConsumerRebalanceListener} callbacks.
-     *
+     * 如果有新的消息，这个方法会立即返回，否则会等待直到传递的超时，如果超时过期了，会返回一个空的集合，
+     * 注意这个方法可能会等待自定义的 ConsumerRebalanceListener 直到超时
      *
      * @param timeout The maximum time to block (must not be greater than {@link Long#MAX_VALUE} milliseconds)
-     *
      * @return map of topic to records since the last fetch for the subscribed list of topics and partitions
-     *
-     * @throws org.apache.kafka.clients.consumer.InvalidOffsetException if the offset for a partition or set of
-     *             partitions is undefined or out of range and no offset reset policy has been configured
-     * @throws org.apache.kafka.common.errors.WakeupException if {@link #wakeup()} is called before or while this
-     *             function is called
-     * @throws org.apache.kafka.common.errors.InterruptException if the calling thread is interrupted before or while
-     *             this function is called
-     * @throws org.apache.kafka.common.errors.AuthenticationException if authentication fails. See the exception for more details
-     * @throws org.apache.kafka.common.errors.AuthorizationException if caller lacks Read access to any of the subscribed
-     *             topics or to the configured groupId. See the exception for more details
-     * @throws org.apache.kafka.common.KafkaException for any other unrecoverable errors (e.g. invalid groupId or
-     *             session timeout, errors deserializing key/value pairs, your rebalance callback thrown exceptions,
-     *             or any new error cases in future versions)
-     * @throws java.lang.IllegalArgumentException if the timeout value is negative
-     * @throws java.lang.IllegalStateException if the consumer is not subscribed to any topics or manually assigned any
-     *             partitions to consume from
-     * @throws java.lang.ArithmeticException if the timeout is greater than {@link Long#MAX_VALUE} milliseconds.
-     * @throws org.apache.kafka.common.errors.InvalidTopicException if the current subscription contains any invalid
-     *             topic (per {@link org.apache.kafka.common.internals.Topic#validate(String)})
+     * @throws org.apache.kafka.clients.consumer.InvalidOffsetException   if the offset for a partition or set of
+     *                                                                    partitions is undefined or out of range and no offset reset policy has been configured
+     * @throws org.apache.kafka.common.errors.WakeupException             if {@link #wakeup()} is called before or while this
+     *                                                                    function is called
+     * @throws org.apache.kafka.common.errors.InterruptException          if the calling thread is interrupted before or while
+     *                                                                    this function is called
+     * @throws org.apache.kafka.common.errors.AuthenticationException     if authentication fails. See the exception for more details
+     * @throws org.apache.kafka.common.errors.AuthorizationException      if caller lacks Read access to any of the subscribed
+     *                                                                    topics or to the configured groupId. See the exception for more details
+     * @throws org.apache.kafka.common.KafkaException                     for any other unrecoverable errors (e.g. invalid groupId or
+     *                                                                    session timeout, errors deserializing key/value pairs, your rebalance callback thrown exceptions,
+     *                                                                    or any new error cases in future versions)
+     * @throws java.lang.IllegalArgumentException                         if the timeout value is negative
+     * @throws java.lang.IllegalStateException                            if the consumer is not subscribed to any topics or manually assigned any
+     *                                                                    partitions to consume from
+     * @throws java.lang.ArithmeticException                              if the timeout is greater than {@link Long#MAX_VALUE} milliseconds.
+     * @throws org.apache.kafka.common.errors.InvalidTopicException       if the current subscription contains any invalid
+     *                                                                    topic (per {@link org.apache.kafka.common.internals.Topic#validate(String)})
      * @throws org.apache.kafka.common.errors.UnsupportedVersionException if the consumer attempts to fetch stable offsets
-     *             when the broker doesn't support this feature
-     * @throws org.apache.kafka.common.errors.FencedInstanceIdException if this consumer instance gets fenced by broker.
+     *                                                                    when the broker doesn't support this feature
+     * @throws org.apache.kafka.common.errors.FencedInstanceIdException   if this consumer instance gets fenced by broker.
      */
     @Override
     public ConsumerRecords<K, V> poll(final Duration timeout) {
@@ -1230,24 +1251,27 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     private ConsumerRecords<K, V> poll(final Timer timer, final boolean includeMetadataInTimeout) {
         acquireAndEnsureOpen();
         try {
+            // 统计开始时间
             this.kafkaConsumerMetrics.recordPollStart(timer.currentTimeMs());
-
+            // 检查订阅类型
             if (this.subscriptions.hasNoSubscriptionOrUserAssignment()) {
                 throw new IllegalStateException("Consumer is not subscribed to any topics or assigned any partitions");
             }
 
             do {
+                // 唤醒 Client
                 client.maybeTriggerWakeup();
 
                 if (includeMetadataInTimeout) {
                     // try to update assignment metadata BUT do not need to block on the timer for join group
+                    // 尝试更新分配的元数据，但是不需要阻塞 timer 加入集群
                     updateAssignmentMetadataIfNeeded(timer, false);
                 } else {
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE), true)) {
                         log.warn("Still waiting for metadata");
                     }
                 }
-
+                // 拉取记录
                 final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = pollForFetches(timer);
                 if (!records.isEmpty()) {
                     // before returning the fetched records, we can send off the next round of fetches
@@ -1259,7 +1283,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     if (fetcher.sendFetches() > 0 || client.hasPendingRequests()) {
                         client.transmitSends();
                     }
-
+                    // 在消息消费之前执行拦截器
                     return this.interceptors.onConsume(new ConsumerRecords<>(records));
                 }
             } while (timer.notExpired());
@@ -1272,10 +1296,11 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     }
 
     boolean updateAssignmentMetadataIfNeeded(final Timer timer, final boolean waitForJoinGroup) {
+        // 检查定义信息，初始化加入集群
         if (coordinator != null && !coordinator.poll(timer, waitForJoinGroup)) {
             return false;
         }
-
+        // 更新消费组的位置
         return updateFetchPositions(timer);
     }
 
@@ -1287,12 +1312,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                 Math.min(coordinator.timeToNextPoll(timer.currentTimeMs()), timer.remainingMs());
 
         // if data is available already, return it immediately
+        // 如果有新的数据，立即拉取
         final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = fetcher.fetchedRecords();
         if (!records.isEmpty()) {
             return records;
         }
 
         // send any new fetches (won't resend pending fetches)
+        // 发送新的拉取
         fetcher.sendFetches();
 
         // We do not want to be stuck blocking in poll if we are missing some positions
@@ -1313,7 +1340,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
             return !fetcher.hasAvailableFetches();
         });
         timer.update(pollTimer.currentTimeMs());
-
+        // 拉取记录
         return fetcher.fetchedRecords();
     }
 
@@ -2412,6 +2439,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     /**
      * Set the fetch position to the committed position (if there is one)
      * or reset it using the offset reset policy the user has configured.
+     * 设置拉取的位置是提交的位置，或者使用配置的重置策略重置位置
      *
      * @throws org.apache.kafka.common.errors.AuthenticationException if authentication fails. See the exception for more details
      * @throws NoOffsetForPartitionException If no offset is stored for a given partition and no offset reset policy is
@@ -2420,6 +2448,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      */
     private boolean updateFetchPositions(final Timer timer) {
         // If any partitions have been truncated due to a leader change, we need to validate the offsets
+        // 检查 offset
         fetcher.validateOffsetsIfNeeded();
 
         cachedSubscriptionHashAllFetchPositions = subscriptions.hasAllFetchPositions();
@@ -2430,6 +2459,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         // coordinator lookup if there are partitions which have missing positions, so
         // a consumer with manually assigned partitions can avoid a coordinator dependence
         // by always ensuring that assigned partitions have an initial position.
+        // 更新 offset
         if (coordinator != null && !coordinator.refreshCommittedOffsetsIfNeeded(timer)) return false;
 
         // If there are partitions still needing a position and a reset policy is defined,

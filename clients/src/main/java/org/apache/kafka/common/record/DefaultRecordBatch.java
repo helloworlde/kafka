@@ -257,6 +257,7 @@ public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRe
 
     private CloseableIterator<Record> compressedIterator(BufferSupplier bufferSupplier, boolean skipKeyValue) {
         final ByteBuffer buffer = this.buffer.duplicate();
+        // 从缓冲区读取
         buffer.position(RECORDS_OFFSET);
         final DataInputStream inputStream = new DataInputStream(compressionType().wrapForInput(buffer, magic(),
             bufferSupplier));
@@ -268,6 +269,7 @@ public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRe
             return new StreamRecordIterator(inputStream) {
                 @Override
                 protected Record doReadRecord(long baseOffset, long firstTimestamp, int baseSequence, Long logAppendTime) throws IOException {
+                    // 从流中读取记录
                     return DefaultRecord.readPartiallyFrom(inputStream, skipArray, baseOffset, firstTimestamp, baseSequence, logAppendTime);
                 }
             };
@@ -275,6 +277,7 @@ public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRe
             return new StreamRecordIterator(inputStream) {
                 @Override
                 protected Record doReadRecord(long baseOffset, long firstTimestamp, int baseSequence, Long logAppendTime) throws IOException {
+                    // 从流中读取记录
                     return DefaultRecord.readFrom(inputStream, baseOffset, firstTimestamp, baseSequence, logAppendTime);
                 }
             };
