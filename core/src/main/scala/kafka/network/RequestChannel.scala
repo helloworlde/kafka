@@ -17,19 +17,15 @@
 
 package kafka.network
 
-import java.net.InetAddress
-import java.nio.ByteBuffer
-import java.util.concurrent._
-
 import com.typesafe.scalalogging.Logger
 import com.yammer.metrics.core.Meter
 import kafka.log.LogConfig
 import kafka.metrics.KafkaMetricsGroup
 import kafka.server.KafkaConfig
-import kafka.utils.{Logging, NotNothing, Pool}
 import kafka.utils.Implicits._
-import org.apache.kafka.common.config.types.Password
+import kafka.utils.{Logging, NotNothing, Pool}
 import org.apache.kafka.common.config.ConfigResource
+import org.apache.kafka.common.config.types.Password
 import org.apache.kafka.common.memory.MemoryPool
 import org.apache.kafka.common.message.IncrementalAlterConfigsRequestData
 import org.apache.kafka.common.message.IncrementalAlterConfigsRequestData._
@@ -39,6 +35,9 @@ import org.apache.kafka.common.requests._
 import org.apache.kafka.common.security.auth.KafkaPrincipal
 import org.apache.kafka.common.utils.{Sanitizer, Time}
 
+import java.net.InetAddress
+import java.nio.ByteBuffer
+import java.util.concurrent._
 import scala.annotation.nowarn
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
@@ -342,6 +341,7 @@ class RequestChannel(val queueSize: Int,
   }
 
   /** Send a request to be handled, potentially blocking until there is room in the queue for the request */
+  // 将请求放入队列中
   def sendRequest(request: RequestChannel.Request): Unit = {
     requestQueue.put(request)
   }

@@ -148,6 +148,7 @@ class LogCleaner(initialConfig: CleanerConfig,
 
   /**
    * Start the background cleaning
+   * 启动日志清除
    */
   def startup(): Unit = {
     info("Starting the log cleaner")

@@ -227,9 +227,11 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
 
       val canStartup = isStartingUp.compareAndSet(false, true)
       if (canStartup) {
+        // 修改启动状态
         brokerState.newState(Starting)
 
         /* setup zookeeper */
+        // 初始化 zk
         initZkClient(time)
 
         /* initialize features */
@@ -239,10 +241,12 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
         }
 
         /* Get or create cluster_id */
+        // 生成一个 UUID，然后 base64 作为 集群 id
         _clusterId = getOrGenerateClusterId(zkClient)
         info(s"Cluster ID = $clusterId")
 
         /* load metadata */
+        // 向 log-dir/meta.properties 文件写入元数据
         val (preloadedBrokerMetadataCheckpoint, initialOfflineDirs) = getBrokerMetadataAndOfflineDirs
 
         /* check cluster id */
@@ -252,19 +256,23 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
             s"The broker is trying to join the wrong cluster. Configured zookeeper.connect may be wrong.")
 
         /* generate brokerId */
+        // 生成 broker id
         config.brokerId = getOrGenerateBrokerId(preloadedBrokerMetadataCheckpoint)
         logContext = new LogContext(s"[KafkaServer id=${config.brokerId}] ")
         this.logIdent = logContext.logPrefix
 
         // initialize dynamic broker configs from ZooKeeper. Any updates made after this will be
         // applied after DynamicConfigManager starts.
+        // 初始化从 ZK 动态读取配置
         config.dynamicConfig.initialize(zkClient)
 
         /* start scheduler */
+        // 初始化用于工作的线程池
         kafkaScheduler = new KafkaScheduler(config.backgroundThreads)
         kafkaScheduler.startup()
 
         /* create and configure metrics */
+        // JMX 统计
         kafkaYammerMetrics = KafkaYammerMetrics.INSTANCE
         kafkaYammerMetrics.configure(config.originals)
 
@@ -280,16 +288,19 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
 
         /* register broker metrics */
         _brokerTopicStats = new BrokerTopicStats
-
+        // 配额管理
         quotaManagers = QuotaFactory.instantiate(config, metrics, time, threadNamePrefix.getOrElse(""))
+        // 通知集群监听器
         notifyClusterListeners(kafkaMetricsReporters ++ metrics.reporters.asScala)
 
         logDirFailureChannel = new LogDirFailureChannel(config.logDirs.size)
 
         /* start log manager */
+        // 日志管理器（检查点、清除、落盘）
         logManager = LogManager(config, initialOfflineDirs, zkClient, brokerState, kafkaScheduler, time, brokerTopicStats, logDirFailureChannel)
         logManager.startup()
 
+        // 元数据
         metadataCache = new MetadataCache(config.brokerId)
         // Enable delegation token cache for all SCRAM mechanisms to simplify dynamic update.
         // This keeps the cache up-to-date if new SCRAM mechanisms are enabled dynamically.
@@ -299,6 +310,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
         // Create and start the socket server acceptor threads so that the bound port is known.
         // Delay starting processors until the end of the initialization sequence to ensure
         // that credentials have been loaded before processing authentications.
+        // 创建并启动 Socket 服务器，绑定端口；延迟启动处理器，直到初始化完成
         socketServer = new SocketServer(config, metrics, time, credentialProvider)
         socketServer.startup(startProcessingRequests = false)
 
@@ -769,6 +781,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
   /**
    * Reads the BrokerMetadata. If the BrokerMetadata doesn't match in all the log.dirs, InconsistentBrokerMetadataException is
    * thrown.
+   * 读取 broker 的元数据
    *
    * The log directories whose meta.properties can not be accessed due to IOException will be returned to the caller
    *
@@ -781,6 +794,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
 
     for (logDir <- config.logDirs) {
       try {
+        // 读取 log-dir/meta.properties 文件，写入元数据
         val brokerMetadataOpt = brokerMetadataCheckpoints(logDir).read()
         brokerMetadataOpt.foreach { brokerMetadata =>
           brokerMetadataMap += (logDir -> brokerMetadata)
@@ -824,6 +838,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
 
   /**
    * Generates new brokerId if enabled or reads from meta.properties based on following conditions
+   * 生成 broker 的 id
    * <ol>
    * <li> config has no broker.id provided and broker id generation is enabled, generates a broker.id based on Zookeeper's sequence
    * <li> config has broker.id and meta.properties contains broker.id if they don't match throws InconsistentBrokerIdException
@@ -833,6 +848,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
    * @return The brokerId.
    */
   private def getOrGenerateBrokerId(brokerMetadata: BrokerMetadata): Int = {
+    // 从配置中获取
     val brokerId = config.brokerId
 
     if (brokerId >= 0 && brokerMetadata.brokerId >= 0 && brokerMetadata.brokerId != brokerId)
@@ -840,11 +856,13 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
         s"Configured broker.id $brokerId doesn't match stored broker.id ${brokerMetadata.brokerId} in meta.properties. " +
         s"If you moved your data, make sure your configured broker.id matches. " +
         s"If you intend to create a new broker, you should remove all data in your data directories (log.dirs).")
-    else if (brokerMetadata.brokerId < 0 && brokerId < 0 && config.brokerIdGenerationEnable) // generate a new brokerId from Zookeeper
+    else if (brokerMetadata.brokerId < 0 && brokerId < 0 && config.brokerIdGenerationEnable) { // generate a new brokerId from Zookeeper
+      // 自动生成
       generateBrokerId
-    else if (brokerMetadata.brokerId >= 0) // pick broker.id from meta.properties
+    } else if (brokerMetadata.brokerId >= 0) { // pick broker.id from meta.properties
+      // 使用 metadata 里面的 brokerId
       brokerMetadata.brokerId
-    else
+    } else
       brokerId
   }
 
