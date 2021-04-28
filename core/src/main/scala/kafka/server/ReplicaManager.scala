@@ -1137,6 +1137,7 @@ class ReplicaManager(val config: KafkaConfig,
         val fetchTimeMs = time.milliseconds
 
         // If we are the leader, determine the preferred read-replica
+        // 选择偏好读取的副本
         val preferredReadReplica = clientMetadata.flatMap(
           metadata => findPreferredReadReplica(partition, metadata, replicaId, fetchInfo.fetchOffset, fetchTimeMs))
 
@@ -1248,6 +1249,9 @@ class ReplicaManager(val config: KafkaConfig,
     * Using the configured [[ReplicaSelector]], determine the preferred read replica for a partition given the
     * client metadata, the requested offset, and the current set of replicas. If the preferred read replica is the
     * leader, return None
+   *  使用配置的 ReplicaSelector，根据客户端的 metadata，请求的 offset，当前的 offset，决定偏好读取的 Partition 副本，
+   *  如果偏好的副本是 leader 则返回 None
+   *
     */
   def findPreferredReadReplica(partition: Partition,
                                clientMetadata: ClientMetadata,
@@ -1260,8 +1264,10 @@ class ReplicaManager(val config: KafkaConfig,
         None
       else {
         replicaSelectorOpt.flatMap { replicaSelector =>
+          // 获取所有的副本
           val replicaEndpoints = metadataCache.getPartitionReplicaEndpoints(partition.topicPartition,
             new ListenerName(clientMetadata.listenerName))
+          // 过滤有效的 offset，转为副本的信息
           val replicaInfos = partition.remoteReplicas
             // Exclude replicas that don't have the requested offset (whether or not if they're in the ISR)
             .filter(replica => replica.logEndOffset >= fetchOffset && replica.logStartOffset <= fetchOffset)
@@ -1270,12 +1276,15 @@ class ReplicaManager(val config: KafkaConfig,
               replica.logEndOffset,
               currentTimeMs - replica.lastCaughtUpTimeMs))
 
+          // leader 副本
           val leaderReplica = new DefaultReplicaView(
             replicaEndpoints.getOrElse(leaderReplicaId, Node.noNode()),
             partition.localLogOrException.logEndOffset, 0L)
+
           val replicaInfoSet = mutable.Set[ReplicaView]() ++= replicaInfos += leaderReplica
 
           val partitionInfo = new DefaultPartitionView(replicaInfoSet.asJava, leaderReplica)
+          // 选择要拉取的偏好副本
           replicaSelector.select(partition.topicPartition, clientMetadata, partitionInfo).asScala.collect {
             // Even though the replica selector can return the leader, we don't want to send it out with the
             // FetchResponse, so we exclude it here

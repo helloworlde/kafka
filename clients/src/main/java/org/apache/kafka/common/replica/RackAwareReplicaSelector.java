@@ -25,6 +25,8 @@ import java.util.stream.Collectors;
 /**
  * Returns a replica whose rack id is equal to the rack id specified in the client request metadata. If no such replica
  * is found, returns the leader.
+ *
+ * 返回和客户端请求中 metadata 相同 rack id 的副本；如果没有找到，则返回 leader
  */
 public class RackAwareReplicaSelector implements ReplicaSelector {
 
@@ -32,18 +34,23 @@ public class RackAwareReplicaSelector implements ReplicaSelector {
     public Optional<ReplicaView> select(TopicPartition topicPartition,
                                         ClientMetadata clientMetadata,
                                         PartitionView partitionView) {
+        // 客户端 metadata 中的 rack id 不能为空
         if (clientMetadata.rackId() != null && !clientMetadata.rackId().isEmpty()) {
+            // 选择相同 rack 的副本
             Set<ReplicaView> sameRackReplicas = partitionView.replicas().stream()
                     .filter(replicaInfo -> clientMetadata.rackId().equals(replicaInfo.endpoint().rack()))
                     .collect(Collectors.toSet());
             if (sameRackReplicas.isEmpty()) {
+                // 如果没有则返回 leader
                 return Optional.of(partitionView.leader());
             } else {
                 if (sameRackReplicas.contains(partitionView.leader())) {
                     // Use the leader if it's in this rack
+                    // 如果包含 leader，则返回 leader
                     return Optional.of(partitionView.leader());
                 } else {
                     // Otherwise, get the most caught-up replica
+                    // 返回最同步的副本
                     return sameRackReplicas.stream().max(ReplicaView.comparator());
                 }
             }

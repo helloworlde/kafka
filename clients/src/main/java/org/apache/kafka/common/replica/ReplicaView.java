@@ -45,8 +45,14 @@ public interface ReplicaView {
     /**
      * Comparator for ReplicaView that returns in the order of "most caught up". This is used for deterministic
      * selection of a replica when there is a tie from a selector.
+     *
+     * 返回最同步的副本
      */
     static Comparator<ReplicaView> comparator() {
+        // 先比较日志的 offset，然后比较落后 leader 的时间，然后比较副本的 id
+        // 即优先选择和 leader 节点同步 offset 接近的；
+        // 如果 offset 同步一致，则选择和 leader 同步间隔最小的
+        // 如果都一致，则选择副本 id 最大的
         return Comparator.comparingLong(ReplicaView::logEndOffset)
             .thenComparing(Comparator.comparingLong(ReplicaView::timeSinceLastCaughtUpMs).reversed())
             .thenComparing(replicaInfo -> replicaInfo.endpoint().id());

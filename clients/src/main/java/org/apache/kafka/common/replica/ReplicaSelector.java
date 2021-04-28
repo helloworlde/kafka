@@ -27,12 +27,16 @@ import java.util.Optional;
 /**
  * Plug-able interface for selecting a preferred read replica given the current set of replicas for a partition
  * and metadata from the client.
+ *
+ * 可插拔的接口，通过客户端的 metadata，选择偏好读取的 partition 副本
  */
 public interface ReplicaSelector extends Configurable, Closeable {
 
     /**
      * Select the preferred replica a client should use for fetching. If no replica is available, this will return an
      * empty optional.
+     *
+     * 选择偏好的要拉取的副本，如果没有副本可用，则返回空
      */
     Optional<ReplicaView> select(TopicPartition topicPartition,
                                  ClientMetadata clientMetadata,
