@@ -128,6 +128,7 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   /**
    * Top-level method that handles all requests and multiplexes to the right api
+   * 处理所有请求的入口
    */
   override def handle(request: RequestChannel.Request): Unit = {
     try {
@@ -146,6 +147,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.OFFSET_FETCH => handleOffsetFetchRequest(request)
         case ApiKeys.FIND_COORDINATOR => handleFindCoordinatorRequest(request)
         case ApiKeys.JOIN_GROUP => handleJoinGroupRequest(request)
+        // 心跳
         case ApiKeys.HEARTBEAT => handleHeartbeatRequest(request)
         case ApiKeys.LEAVE_GROUP => handleLeaveGroupRequest(request)
         case ApiKeys.SYNC_GROUP => handleSyncGroupRequest(request)
@@ -1632,11 +1634,17 @@ class KafkaApis(val requestChannel: RequestChannel,
     })
   }
 
+  /**
+   * 处理心跳请求
+   * @param request
+   */
   def handleHeartbeatRequest(request: RequestChannel.Request): Unit = {
     val heartbeatRequest = request.body[HeartbeatRequest]
 
     // the callback for sending a heartbeat response
+    // 发送响应
     def sendResponseCallback(error: Errors): Unit = {
+      // 创建响应
       def createResponse(requestThrottleMs: Int): AbstractResponse = {
         val response = new HeartbeatResponse(
           new HeartbeatResponseData()
@@ -1648,13 +1656,14 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
       sendResponseMaybeThrottle(request, createResponse)
     }
-
+    // 版本不支持
     if (heartbeatRequest.data.groupInstanceId != null && config.interBrokerProtocolVersion < KAFKA_2_3_IV0) {
       // Only enable static membership when IBP >= 2.3, because it is not safe for the broker to use the static member logic
       // until we are sure that all brokers support it. If static group being loaded by an older coordinator, it will discard
       // the group.instance.id field, so static members could accidentally become "dynamic", which leads to wrong states.
       sendResponseCallback(Errors.UNSUPPORTED_VERSION)
     } else if (!authorize(request.context, READ, GROUP, heartbeatRequest.data.groupId)) {
+      // 授权检查失败
       sendResponseMaybeThrottle(request, requestThrottleMs =>
         new HeartbeatResponse(
             new HeartbeatResponseData()
@@ -1662,6 +1671,7 @@ class KafkaApis(val requestChannel: RequestChannel,
               .setErrorCode(Errors.GROUP_AUTHORIZATION_FAILED.code)))
     } else {
       // let the coordinator to handle heartbeat
+      // 由协调器处理心跳
       groupCoordinator.handleHeartbeat(
         heartbeatRequest.data.groupId,
         heartbeatRequest.data.memberId,
@@ -3262,6 +3272,7 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   // Throttle the channel if the request quota is enabled but has been violated. Regardless of throttling, send the
   // response immediately.
+  // 如果开启了节流，则发送客户端下一个请求等待时间
   private def sendResponseMaybeThrottle(request: RequestChannel.Request,
                                         createResponse: Int => AbstractResponse,
                                         onComplete: Option[Send => Unit] = None): Unit = {
@@ -3339,6 +3350,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     requestChannel.sendResponse(new RequestChannel.CloseConnectionResponse(request))
   }
 
+  // 发送响应
   private def sendResponse(request: RequestChannel.Request,
                            responseOpt: Option[AbstractResponse],
                            onComplete: Option[Send => Unit]): Unit = {
@@ -3347,10 +3359,12 @@ class KafkaApis(val requestChannel: RequestChannel,
 
     val response = responseOpt match {
       case Some(response) =>
+        // 构建响应
         val responseSend = request.context.buildResponse(response)
         val responseString =
           if (RequestChannel.isRequestLoggingEnabled) Some(response.toString(request.context.apiVersion))
           else None
+        // 发送响应
         new RequestChannel.SendResponse(request, responseSend, responseString, onComplete)
       case None =>
         new RequestChannel.NoOpResponse(request)
