@@ -62,6 +62,10 @@ object Kafka extends Logging {
     props
   }
 
+  /**
+   * Kafka Broker 启动
+   * @param args
+   */
   def main(args: Array[String]): Unit = {
     try {
       val serverProps = getPropsFromArgs(args)
@@ -78,7 +82,7 @@ object Kafka extends Logging {
 
       // attach shutdown handler to catch terminating signals as well as normal termination
       Exit.addShutdownHook("kafka-shutdown-hook", kafkaServerStartable.shutdown())
-
+      // 启动 Broker
       kafkaServerStartable.startup()
       kafkaServerStartable.awaitShutdown()
     }
