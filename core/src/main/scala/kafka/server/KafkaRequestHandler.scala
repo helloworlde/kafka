@@ -56,6 +56,7 @@ class KafkaRequestHandler(id: Int,
       // time should be discounted by # threads.
       val startSelectTime = time.nanoseconds
 
+      // 从队列中获取请求
       val req = requestChannel.receiveRequest(300)
       val endTime = time.nanoseconds
       val idleTime = endTime - startSelectTime
@@ -63,6 +64,7 @@ class KafkaRequestHandler(id: Int,
 
       req match {
         case RequestChannel.ShutdownRequest =>
+          // 关闭请求
           debug(s"Kafka request handler $id on broker $brokerId received shut down command")
           shutdownComplete.countDown()
           return
@@ -71,6 +73,7 @@ class KafkaRequestHandler(id: Int,
           try {
             request.requestDequeueTimeNanos = endTime
             trace(s"Kafka request handler $id on broker $brokerId handling request $request")
+            // 处理请求
             apis.handle(request)
           } catch {
             case e: FatalExitError =>
