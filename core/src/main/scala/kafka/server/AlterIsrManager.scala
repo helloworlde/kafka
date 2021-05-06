@@ -37,6 +37,9 @@ import scala.jdk.CollectionConverters._
 /**
  * Handles the sending of AlterIsr requests to the controller. Updating the ISR is an asynchronous operation,
  * so partitions will learn about updates through LeaderAndIsr messages sent from the controller
+ *
+ * 处理发送 AlertIsr 请求给 Controller，更新 ISR 是一个异步的操作，Partition 会收到 Controller 发出的 LeaderAndIsr 消息
+ * 获取更新
  */
 trait AlterIsrManager {
   def start(): Unit

@@ -44,10 +44,14 @@ object Broker {
 
 /**
  * A Kafka broker.
+ * Kafka Broker
  *
  * @param id          a broker id
+ *                    Broker Id
  * @param endPoints   a collection of EndPoint. Each end-point is (host, port, listener name, security protocol).
+ *                    一组 Broker 端点
  * @param rack        an optional rack
+ *                    可选的 Rack，用于地域分区
  * @param features    supported features
  */
 case class Broker(id: Int, endPoints: Seq[EndPoint], rack: Option[String], features: Features[SupportedVersionRange]) {

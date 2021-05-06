@@ -175,6 +175,7 @@ class GroupMetadataManager(brokerId: Int,
     scheduler.startup()
     if (enableMetadataExpiration) {
       scheduler.schedule(name = "delete-expired-group-metadata",
+        // 清除之前的 Group 元数据
         fun = () => cleanupGroupMetadata(),
         period = config.offsetsRetentionCheckIntervalMs,
         unit = TimeUnit.MILLISECONDS)

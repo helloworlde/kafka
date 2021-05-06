@@ -87,11 +87,15 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
 
   /**
     * Registers the broker in zookeeper and return the broker epoch.
+    * 向 ZK 注册 Broker
+   *
     * @param brokerInfo payload of the broker znode
     * @return broker epoch (znode create transaction id)
     */
   def registerBroker(brokerInfo: BrokerInfo): Long = {
+    // Path 就是 Broker Id
     val path = brokerInfo.path
+    // 创建
     val stat = checkedEphemeralCreate(path, brokerInfo.toJsonBytes)
     info(s"Registered broker ${brokerInfo.broker.id} at path $path with addresses: " +
       s"${brokerInfo.broker.endPoints.map(_.connectionString).mkString(",")}, czxid (broker epoch): ${stat.getCzxid}")
@@ -1763,6 +1767,7 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
   private class CheckedEphemeral(path: String, data: Array[Byte]) extends Logging {
     def create(): Stat = {
       val response = retryRequestUntilConnected(
+        // 创建并设置属性
         MultiRequest(Seq(
           CreateOp(path, null, defaultAcls(path), CreateMode.EPHEMERAL),
           SetDataOp(path, data, 0)))

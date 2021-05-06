@@ -103,6 +103,7 @@ class GroupCoordinator(val brokerId: Int,
 
   /**
    * Startup logic executed at the same time when the server starts up.
+   * 当 Server 启动时执行启动逻辑
    */
   def startup(enableMetadataExpiration: Boolean = true): Unit = {
     info("Starting up.")

@@ -337,6 +337,9 @@ class ReplicaManager(val config: KafkaConfig,
     debug("Request key %s unblocked %d ElectLeader.".format(key.keyLabel, completed))
   }
 
+  /**
+   * 启动副本管理器
+   */
   def startup(): Unit = {
     // start ISR expiration thread
     // A follower can lag behind leader for up to config.replicaLagTimeMaxMs x 1.5 before it is removed from ISR
