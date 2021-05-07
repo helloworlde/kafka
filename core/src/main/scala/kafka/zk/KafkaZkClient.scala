@@ -346,26 +346,33 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
   /**
    * Sets or creates the entity znode path with the given configs depending
    * on whether it already exists or not.
+   * 无论配置是否存在，都根据所给的配置设置或创建 znode
    *
    * If this is method is called concurrently, the last writer wins. In cases where we update configs and then
    * partition assignment (i.e. create topic), it's possible for one thread to set this and the other to set the
    * partition assignment. As such, the recommendation is to never call create topic for the same topic with different
    * configs/partition assignment concurrently.
+   * 如果方法并发调用，最后写入的生效；如更新配置或者分配 Partition
    *
    * @param rootEntityType entity type
+   *                       类型
    * @param sanitizedEntityName entity name
+   *                            名称
    * @throws KeeperException if there is an error while setting or creating the znode
    */
   def setOrCreateEntityConfigs(rootEntityType: String, sanitizedEntityName: String, config: Properties) = {
 
+    // 发送请求
     def set(configData: Array[Byte]): SetDataResponse = {
       val setDataRequest = SetDataRequest(ConfigEntityZNode.path(rootEntityType, sanitizedEntityName),
         configData, ZkVersion.MatchAnyVersion)
       retryRequestUntilConnected(setDataRequest)
     }
 
+    // 创建或设置属性
     def createOrSet(configData: Array[Byte]): Unit = {
       val path = ConfigEntityZNode.path(rootEntityType, sanitizedEntityName)
+      // 递归创建 Path，最终会在 /brokers/topics 下面创建相应的节点
       try createRecursive(path, configData)
       catch {
         case _: NodeExistsException => set(configData).maybeThrow()
@@ -374,6 +381,7 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
 
     val configData = ConfigEntityZNode.encode(config)
 
+    // 发送请求
     val setDataResponse = set(configData)
     setDataResponse.resultCode match {
       case Code.NONODE => createOrSet(configData)
@@ -1630,6 +1638,12 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
     }
   }
 
+  /**
+   * 递归创建 path
+   * @param path
+   * @param data
+   * @param throwIfPathExists
+   */
   private[kafka] def createRecursive(path: String, data: Array[Byte] = null, throwIfPathExists: Boolean = true) = {
 
     def parentPath(path: String): String = {

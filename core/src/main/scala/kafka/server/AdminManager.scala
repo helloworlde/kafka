@@ -87,6 +87,13 @@ class AdminManager(val config: KafkaConfig,
     debug(s"Request key ${key.keyLabel} unblocked $completed topic requests.")
   }
 
+  /**
+   * Topic 创建策略检查
+   * @param topic
+   * @param resolvedNumPartitions
+   * @param resolvedReplicationFactor
+   * @param assignments
+   */
   private def validateTopicCreatePolicy(topic: CreatableTopic,
                                         resolvedNumPartitions: Int,
                                         resolvedReplicationFactor: Short,
@@ -136,6 +143,7 @@ class AdminManager(val config: KafkaConfig,
   /**
     * Create topics and wait until the topics have been completely created.
     * The callback function will be triggered either when timeout, error or the topics are created.
+    * 创建 Topic 并等待创建完成，当 Topic 创建完成或出现错误或者超时时会触发回调
     */
   def createTopics(timeout: Int,
                    validateOnly: Boolean,
@@ -145,9 +153,11 @@ class AdminManager(val config: KafkaConfig,
                    responseCallback: Map[String, ApiError] => Unit): Unit = {
 
     // 1. map over topics creating assignment and calling zookeeper
+    // 获取可用的 broker
     val brokers = metadataCache.getAliveBrokers.map { b => kafka.admin.BrokerMetadata(b.id, b.rack) }
     val metadata = toCreate.values.map(topic =>
       try {
+        // 检查是否已经存在
         if (metadataCache.contains(topic.name))
           throw new TopicExistsException(s"Topic '${topic.name}' already exists.")
 
@@ -155,6 +165,7 @@ class AdminManager(val config: KafkaConfig,
         if (nullConfigs.nonEmpty)
           throw new InvalidRequestException(s"Null value not supported for topic configs : ${nullConfigs.mkString(",")}")
 
+        // Partition 或者 replicas 数量不正确
         if ((topic.numPartitions != NO_NUM_PARTITIONS || topic.replicationFactor != NO_REPLICATION_FACTOR)
             && !topic.assignments().isEmpty) {
           throw new InvalidRequestException("Both numPartitions or replicationFactor and replicasAssignments were set. " +
@@ -166,10 +177,13 @@ class AdminManager(val config: KafkaConfig,
         val resolvedReplicationFactor = if (topic.replicationFactor == NO_REPLICATION_FACTOR)
           defaultReplicationFactor else topic.replicationFactor
 
+        // 分配 Replicas
         val assignments = if (topic.assignments.isEmpty) {
+          // 没有指定时直接分配
           AdminUtils.assignReplicasToBrokers(
             brokers, resolvedNumPartitions, resolvedReplicationFactor)
         } else {
+          // 有指定时使用指定的
           val assignments = new mutable.HashMap[Int, Seq[Int]]
           // Note: we don't check that replicaAssignment contains unknown brokers - unlike in add-partitions case,
           // this follows the existing logic in TopicCommand
@@ -180,20 +194,25 @@ class AdminManager(val config: KafkaConfig,
         }
         trace(s"Assignments for topic $topic are $assignments ")
 
+        // 配置
         val configs = new Properties()
         topic.configs.forEach(entry => configs.setProperty(entry.name, entry.value))
+        // 检查 Topic 信息和配置
         adminZkClient.validateTopicCreate(topic.name, assignments, configs)
+        // Topic 创建策略检查
         validateTopicCreatePolicy(topic, resolvedNumPartitions, resolvedReplicationFactor, assignments)
 
         // For responses with DescribeConfigs permission, populate metadata and configs. It is
         // safe to populate it before creating the topic because the values are unset if the
         // creation fails.
+        // 填充配置和元数据
         maybePopulateMetadataAndConfigs(includeConfigsAndMetadata, topic.name, configs, assignments)
 
         if (validateOnly) {
           CreatePartitionsMetadata(topic.name, assignments.keySet)
         } else {
           controllerMutationQuota.record(assignments.size)
+          // 创建 Topic
           adminZkClient.createTopicWithAssignment(topic.name, configs, assignments, validate = false)
           CreatePartitionsMetadata(topic.name, assignments.keySet)
         }

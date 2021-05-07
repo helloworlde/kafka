@@ -16,20 +16,19 @@
 */
 package kafka.zk
 
-import java.util.Properties
-
 import kafka.admin.{AdminOperationException, AdminUtils, BrokerMetadata, RackAwareMode}
 import kafka.common.TopicAlreadyMarkedForDeletionException
 import kafka.controller.ReplicaAssignment
 import kafka.log.LogConfig
 import kafka.server.{ConfigEntityName, ConfigType, DynamicConfig}
-import kafka.utils._
 import kafka.utils.Implicits._
+import kafka.utils._
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors._
 import org.apache.kafka.common.internals.Topic
 import org.apache.zookeeper.KeeperException.NodeExistsException
 
+import java.util.Properties
 import scala.collection.{Map, Seq}
 
 /**
@@ -85,16 +84,22 @@ class AdminZkClient(zkClient: KafkaZkClient) extends Logging {
   /**
    * Create topic and optionally validate its parameters. Note that this method is used by the
    * TopicCommand as well.
+   * 创建 Topic 并选择性的验证参数
    *
-   * @param topic The name of the topic
-   * @param config The config of the topic
+   * @param topic                      The name of the topic
+   *                                   Topic 的名称
+   * @param config                     The config of the topic
+   *                                   Topic 的配置
    * @param partitionReplicaAssignment The assignments of the topic
-   * @param validate Boolean indicating if parameters must be validated or not (true by default)
+   *                                   Topic 分配的 Replicas
+   * @param validate                   Boolean indicating if parameters must be validated or not (true by default)
+   *                                   表明参数是否是必须验证的
    */
   def createTopicWithAssignment(topic: String,
                                 config: Properties,
                                 partitionReplicaAssignment: Map[Int, Seq[Int]],
                                 validate: Boolean = true): Unit = {
+    // 检查 Topic
     if (validate)
       validateTopicCreate(topic, partitionReplicaAssignment, config)
 
@@ -102,9 +107,11 @@ class AdminZkClient(zkClient: KafkaZkClient) extends Logging {
       s"assignment $partitionReplicaAssignment")
 
     // write out the config if there is any, this isn't transactional with the partition assignments
+    // 创建 Topic
     zkClient.setOrCreateEntityConfigs(ConfigType.Topic, topic, config)
 
     // create the partition assignment
+    // 创建 Partition 分配
     writeTopicPartitionAssignment(topic, partitionReplicaAssignment.map { case (k, v) => k -> ReplicaAssignment(v) },
       isUpdate = false)
   }
@@ -112,6 +119,7 @@ class AdminZkClient(zkClient: KafkaZkClient) extends Logging {
   /**
    * Validate topic creation parameters. Note that this method is indirectly used by the
    * TopicCommand via the `createTopicWithAssignment` method.
+   * 检查 topic 创建参数
    *
    * @param topic The name of the topic
    * @param partitionReplicaAssignment The assignments of the topic
@@ -122,9 +130,11 @@ class AdminZkClient(zkClient: KafkaZkClient) extends Logging {
                           config: Properties): Unit = {
     Topic.validate(topic)
 
+    // 检查是否在 zk 存在
     if (zkClient.topicExists(topic))
       throw new TopicExistsException(s"Topic '$topic' already exists.")
     else if (Topic.hasCollisionChars(topic)) {
+      // 含有特殊字符时检查是否集群内已经存在
       val allTopics = zkClient.getAllTopicsInCluster()
       // check again in case the topic was created in the meantime, otherwise the
       // topic could potentially collide with itself
@@ -136,9 +146,11 @@ class AdminZkClient(zkClient: KafkaZkClient) extends Logging {
       }
     }
 
+    // 检查 Partition 副本数
     if (partitionReplicaAssignment.values.map(_.size).toSet.size != 1)
       throw new InvalidReplicaAssignmentException("All partitions should have the same number of replicas")
 
+    // 检查 Replicas 是否有重复分配
     partitionReplicaAssignment.values.foreach(reps =>
       if (reps.size != reps.toSet.size)
         throw new InvalidReplicaAssignmentException("Duplicate replica assignment found: " + partitionReplicaAssignment)
@@ -149,7 +161,7 @@ class AdminZkClient(zkClient: KafkaZkClient) extends Logging {
     if (partitionReplicaAssignment.size != partitionReplicaAssignment.toSet.size ||
         partitionReplicaAssignment.keys.filter(_ >= 0).sum != sequenceSum)
         throw new InvalidReplicaAssignmentException("partitions should be a consecutive 0-based integer sequence")
-
+    // 检查配置
     LogConfig.validate(config)
   }
 
