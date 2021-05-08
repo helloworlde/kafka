@@ -1344,6 +1344,7 @@ class ReplicaManager(val config: KafkaConfig,
         }
 
       val response = {
+        // 请求中的 epoch 小于当前的 epoch，说明 leader 发生了变化，则忽略请求
         if (leaderAndIsrRequest.controllerEpoch < controllerEpoch) {
           stateChangeLogger.warn(s"Ignoring LeaderAndIsr request from controller $controllerId with " +
             s"correlation id $correlationId since its controller epoch ${leaderAndIsrRequest.controllerEpoch} is old. " +
@@ -1356,8 +1357,10 @@ class ReplicaManager(val config: KafkaConfig,
           val partitionStates = new mutable.HashMap[Partition, LeaderAndIsrPartitionState]()
 
           // First create the partition if it doesn't exist already
+          // 如果 topic Partition 不存在，则先创建
           requestPartitionStates.foreach { partitionState =>
             val topicPartition = new TopicPartition(partitionState.topicName, partitionState.partitionIndex)
+            // 获取 Partition
             val partitionOpt = getPartition(topicPartition) match {
               case HostedPartition.Offline =>
                 stateChangeLogger.warn(s"Ignoring LeaderAndIsr request from " +
@@ -1377,6 +1380,7 @@ class ReplicaManager(val config: KafkaConfig,
             }
 
             // Next check partition's leader epoch
+            // 检查 Partition leader 的 epoch
             partitionOpt.foreach { partition =>
               val currentLeaderEpoch = partition.getLeaderEpoch
               val requestLeaderEpoch = partitionState.leaderEpoch
@@ -1413,11 +1417,14 @@ class ReplicaManager(val config: KafkaConfig,
           }
           val partitionsToBeFollower = partitionStates.filter { case (k, _) => !partitionsToBeLeader.contains(k) }
 
+          // 高水位
           val highWatermarkCheckpoints = new LazyOffsetCheckpoints(this.highWatermarkCheckpoints)
-          val partitionsBecomeLeader = if (partitionsToBeLeader.nonEmpty)
+          // 把当前的 broker 变为给定的 Partition 中的 leader
+          val partitionsBecomeLeader = if (partitionsToBeLeader.nonEmpty) {
+            // 更新 leader，检查日志，更新高水位
             makeLeaders(controllerId, controllerEpoch, partitionsToBeLeader, correlationId, responseMap,
               highWatermarkCheckpoints)
-          else
+          } else
             Set.empty[Partition]
           val partitionsBecomeFollower = if (partitionsToBeFollower.nonEmpty)
             makeFollowers(controllerId, controllerEpoch, partitionsToBeFollower, correlationId, responseMap,
@@ -1452,13 +1459,16 @@ class ReplicaManager(val config: KafkaConfig,
 
           // we initialize highwatermark thread after the first leaderisrrequest. This ensures that all the partitions
           // have been completely populated before starting the checkpointing there by avoiding weird race conditions
+          // 开始高水位检查线程
           startHighWatermarkCheckPointThread()
 
           maybeAddLogDirFetchers(partitionStates.keySet, highWatermarkCheckpoints)
 
           replicaFetcherManager.shutdownIdleFetcherThreads()
           replicaAlterLogDirsManager.shutdownIdleFetcherThreads()
+          // 通知 leader 变化
           onLeadershipChange(partitionsBecomeLeader, partitionsBecomeFollower)
+          // 发送响应
           val responsePartitions = responseMap.iterator.map { case (tp, error) =>
             new LeaderAndIsrPartitionError()
               .setTopicName(tp.topic)
@@ -1509,10 +1519,15 @@ class ReplicaManager(val config: KafkaConfig,
 
   /*
    * Make the current broker to become leader for a given set of partitions by:
+   * 把当前的 broker 变为给定的 Partition 中的 leader
    *
    * 1. Stop fetchers for these partitions
    * 2. Update the partition metadata in cache
    * 3. Add these partitions to the leader partitions set
+   *
+   * 1. 停止这些 Partition 的 fetcher
+   * 2. 更新缓存中的 Partition 元数据
+   * 3. 将这些 Partition 添加到 leader 的集合中
    *
    * If an unexpected error is thrown in this function, it will be propagated to KafkaApis where
    * the error message will be set on each partition since we do not know which partition caused it. Otherwise,
@@ -1539,13 +1554,16 @@ class ReplicaManager(val config: KafkaConfig,
 
     try {
       // First stop fetchers for all the partitions
+      // 停止所有 Partition 的 fetcher
       replicaFetcherManager.removeFetcherForPartitions(partitionStates.keySet.map(_.topicPartition))
       stateChangeLogger.info(s"Stopped fetchers as part of LeaderAndIsr request correlationId $correlationId from " +
         s"controller $controllerId epoch $controllerEpoch as part of the become-leader transition for " +
         s"${partitionStates.size} partitions")
       // Update the partition information to be the leader
+      // 更新变为 leader 的 Partition 信息
       partitionStates.forKeyValue { (partition, partitionState) =>
         try {
+          // 更新 leader，会检查日志文件，如果没有则创建
           if (partition.makeLeader(partitionState, highWatermarkCheckpoints))
             partitionsToMakeLeaders += partition
           else

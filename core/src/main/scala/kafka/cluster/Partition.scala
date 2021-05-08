@@ -16,9 +16,6 @@
  */
 package kafka.cluster
 
-import java.util.concurrent.locks.ReentrantReadWriteLock
-import java.util.{Optional, Properties}
-
 import kafka.api.{ApiVersion, LeaderAndIsr}
 import kafka.common.UnexpectedAppendOffsetException
 import kafka.controller.{KafkaController, StateChangeLogger}
@@ -42,6 +39,8 @@ import org.apache.kafka.common.requests._
 import org.apache.kafka.common.utils.Time
 import org.apache.kafka.common.{IsolationLevel, TopicPartition}
 
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import java.util.{Optional, Properties}
 import scala.collection.{Map, Seq}
 import scala.jdk.CollectionConverters._
 
@@ -60,6 +59,10 @@ trait PartitionStateStore {
 class ZkPartitionStateStore(topicPartition: TopicPartition,
                             zkClient: KafkaZkClient) extends PartitionStateStore {
 
+  /**
+   * 获取 Topic 配置
+   * @return
+   */
   override def fetchTopicConfig(): Properties = {
     val adminZkClient = new AdminZkClient(zkClient)
     adminZkClient.fetchEntityConfig(ConfigType.Topic, topicPartition.topic)
@@ -363,6 +366,7 @@ class Partition(val topicPartition: TopicPartition,
   def createLogIfNotExists(isNew: Boolean, isFutureReplica: Boolean, offsetCheckpoints: OffsetCheckpoints): Unit = {
     isFutureReplica match {
       case true if futureLog.isEmpty =>
+        // 如果日志为空，则创建日志
         val log = createLog(isNew, isFutureReplica, offsetCheckpoints)
         this.futureLog = Option(log)
       case false if log.isEmpty =>
@@ -373,24 +377,37 @@ class Partition(val topicPartition: TopicPartition,
   }
 
   // Visible for testing
+
+  /**
+   * 创建日志
+   * @param isNew
+   * @param isFutureReplica
+   * @param offsetCheckpoints
+   * @return
+   */
   private[cluster] def createLog(isNew: Boolean, isFutureReplica: Boolean, offsetCheckpoints: OffsetCheckpoints): Log = {
+    // 获取日志配置
     def fetchLogConfig: LogConfig = {
       val props = stateStore.fetchTopicConfig()
       LogConfig.fromProps(logManager.currentDefaultConfig.originals, props)
     }
 
+    // 更新高水位
     def updateHighWatermark(log: Log) = {
       val checkpointHighWatermark = offsetCheckpoints.fetch(log.parentDir, topicPartition).getOrElse {
         info(s"No checkpointed highwatermark is found for partition $topicPartition")
         0L
       }
+      // 初始高水位
       val initialHighWatermark = log.updateHighWatermark(checkpointHighWatermark)
       info(s"Log loaded for partition $topicPartition with initial high watermark $initialHighWatermark")
     }
 
+    // 初始化日志
     logManager.initializingLog(topicPartition)
     var maybeLog: Option[Log] = None
     try {
+      // 创建日志文件夹和日志文件
       val log = logManager.getOrCreateLog(topicPartition, () => fetchLogConfig, isNew, isFutureReplica)
       maybeLog = Some(log)
       updateHighWatermark(log)
@@ -554,6 +571,8 @@ class Partition(val topicPartition: TopicPartition,
    * Make the local replica the leader by resetting LogEndOffset for remote replicas (there could be old LogEndOffset
    * from the time when this broker was the leader last time) and setting the new leader and ISR.
    * If the leader replica id does not change, return false to indicate the replica manager.
+   * 将当前的 broker 变为 leader，重置远端的副本的 LogEndOffset，设置新的 leader 和 ISR
+   * 如果 leader 没有发生变化，返回 false
    */
   def makeLeader(partitionState: LeaderAndIsrPartitionState,
                  highWatermarkCheckpoints: OffsetCheckpoints): Boolean = {
@@ -566,6 +585,7 @@ class Partition(val topicPartition: TopicPartition,
       val addingReplicas = partitionState.addingReplicas.asScala.map(_.toInt)
       val removingReplicas = partitionState.removingReplicas.asScala.map(_.toInt)
 
+      // 保存 topic 的 Partition 分配和 ISR
       updateAssignmentAndIsr(
         assignment = partitionState.replicas.asScala.map(_.toInt),
         isr = isr,
@@ -573,6 +593,7 @@ class Partition(val topicPartition: TopicPartition,
         removingReplicas = removingReplicas
       )
       try {
+        // 如果没有 log 则创建
         createLogIfNotExists(partitionState.isNew, isFutureReplica = false, highWatermarkCheckpoints)
       } catch {
         case e: ZooKeeperClientException =>
@@ -616,6 +637,7 @@ class Partition(val topicPartition: TopicPartition,
         // mark local replica as the leader after converting hw
         leaderReplicaIdOpt = Some(localBrokerId)
         // reset log end offset for remote replicas
+        // 更新其他 Replicas 的 Fetcher
         remoteReplicas.foreach { replica =>
           replica.updateFetchState(
             followerFetchOffsetMetadata = LogOffsetMetadata.UnknownOffsetMetadata,
@@ -625,11 +647,14 @@ class Partition(val topicPartition: TopicPartition,
         }
       }
       // we may need to increment high watermark since ISR could be down to 1
+      // 更新高水位
       (maybeIncrementLeaderHW(leaderLog), isNewLeader)
     }
     // some delayed operations may be unblocked after HW changed
-    if (leaderHWIncremented)
+    if (leaderHWIncremented) {
+      // 完成因高水位变化延迟的请求
       tryCompleteDelayedRequests()
+    }
     isNewLeader
   }
 
@@ -742,15 +767,22 @@ class Partition(val topicPartition: TopicPartition,
    * It creates a new Replica object for any new remote broker. The isr parameter is
    * expected to be a subset of the assignment parameter.
    *
+   * 保存 topic 的 Partition 分配和 ISR
+   * 会为每一个远程的 broker 创建新的副本对象，isr 应当是分配的参数的子集
+   *
    * Note: public visibility for tests.
    *
-   * @param assignment An ordered sequence of all the broker ids that were assigned to this
-   *                   topic partition
-   * @param isr The set of broker ids that are known to be insync with the leader
-   * @param addingReplicas An ordered sequence of all broker ids that will be added to the
-    *                       assignment
+   * @param assignment       An ordered sequence of all the broker ids that were assigned to this
+   *                         topic partition
+   *                         分配给这个 topic Partition 的有序的 broker id 集合
+   * @param isr              The set of broker ids that are known to be insync with the leader
+   *                         和 leader 同步的 broker 集合
+   * @param addingReplicas   An ordered sequence of all broker ids that will be added to the
+   *                         assignment
+   *                         要分配的 broker 的 id 的有序集合
    * @param removingReplicas An ordered sequence of all broker ids that will be removed from
-    *                         the assignment
+   *                         the assignment
+   *                         要移除的 broker 的 id 的有序集合
    */
   def updateAssignmentAndIsr(assignment: Seq[Int],
                              isr: Set[Int],

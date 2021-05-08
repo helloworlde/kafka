@@ -17,23 +17,22 @@
 
 package kafka.log
 
-import java.io._
-import java.nio.file.Files
-import java.util.concurrent._
-import java.util.concurrent.atomic.AtomicInteger
-
 import kafka.metrics.KafkaMetricsGroup
 import kafka.server.checkpoints.OffsetCheckpointFile
 import kafka.server.{BrokerState, RecoveringFromUncleanShutdown, _}
 import kafka.utils._
 import kafka.zk.KafkaZkClient
-import org.apache.kafka.common.{KafkaException, TopicPartition}
-import org.apache.kafka.common.utils.Time
 import org.apache.kafka.common.errors.{KafkaStorageException, LogDirNotFoundException}
+import org.apache.kafka.common.utils.Time
+import org.apache.kafka.common.{KafkaException, TopicPartition}
 
-import scala.jdk.CollectionConverters._
+import java.io._
+import java.nio.file.Files
+import java.util.concurrent._
+import java.util.concurrent.atomic.AtomicInteger
 import scala.collection._
 import scala.collection.mutable.ArrayBuffer
+import scala.jdk.CollectionConverters._
 import scala.util.{Failure, Success, Try}
 
 /**
@@ -704,6 +703,7 @@ class LogManager(logDirs: Seq[File],
 
   /**
    * Get the log if it exists, otherwise return None
+   * 如果存在则返回日志，否则返回 none
    *
    * @param topicPartition the partition of the log
    * @param isFuture True iff the future log of the specified partition should be returned
@@ -763,14 +763,21 @@ class LogManager(logDirs: Seq[File],
    * Otherwise if isNew=true or if there is no offline log directory, create a log for the given topic and the given partition
    * Otherwise throw KafkaStorageException
    *
+   * 如果日志存在，则返回存在日志的复制，否则，如果 ifNew 是 true，或者没有日志文件，根据给定的 Topic 和 Partition 创建日志文件
+   *
    * @param topicPartition The partition whose log needs to be returned or created
-   * @param loadConfig A function to retrieve the log config, this is only called if the log is created
-   * @param isNew Whether the replica should have existed on the broker or not
-   * @param isFuture True if the future log of the specified partition should be returned or created
+   *                       需要创建或返回日志的 Partition
+   * @param loadConfig     A function to retrieve the log config, this is only called if the log is created
+   *                       获取日志配置的函数，仅在日志创建后调用
+   * @param isNew          Whether the replica should have existed on the broker or not
+   *                       broker 副本是否应当存在
+   * @param isFuture       True if the future log of the specified partition should be returned or created
+   *                       如果指定的  Partition 应当返回或者创建 future 日志则是 true
    * @throws KafkaStorageException if isNew=false, log is not found in the cache and there is offline log directory on the broker
    */
   def getOrCreateLog(topicPartition: TopicPartition, loadConfig: () => LogConfig, isNew: Boolean = false, isFuture: Boolean = false): Log = {
     logCreationOrDeletionLock synchronized {
+      // 获取日志，如果不存在则创建
       getLog(topicPartition, isFuture).getOrElse {
         // create the log if it has not already been created in another thread
         if (!isNew && offlineLogDirs.nonEmpty)
@@ -799,6 +806,7 @@ class LogManager(logDirs: Seq[File],
             Log.logDirName(topicPartition)
         }
 
+        // 创建日志文件夹
         val logDir = logDirs
           .iterator // to prevent actually mapping the whole list, lazy map
           .map(createLogDirectory(_, logDirName))
@@ -806,7 +814,9 @@ class LogManager(logDirs: Seq[File],
           .getOrElse(Failure(new KafkaStorageException("No log directories available. Tried " + logDirs.map(_.getAbsolutePath).mkString(", "))))
           .get // If Failure, will throw
 
+        // 获取日志配置
         val config = loadConfig()
+        // 创建日志，会创建 .index, .log, .timeindex 和 leader-epoch-checkpoint 文件
         val log = Log(
           dir = logDir,
           config = config,
@@ -833,11 +843,18 @@ class LogManager(logDirs: Seq[File],
     }
   }
 
+  /**
+   * 创建日志目录
+   * @param logDir
+   * @param logDirName
+   * @return
+   */
   private[log] def createLogDirectory(logDir: File, logDirName: String): Try[File] = {
     val logDirPath = logDir.getAbsolutePath
     if (isLogDirOnline(logDirPath)) {
       val dir = new File(logDirPath, logDirName)
       try {
+        // 创建文件夹
         Files.createDirectories(dir.toPath)
         Success(dir)
       } catch {

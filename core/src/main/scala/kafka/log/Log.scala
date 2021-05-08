@@ -364,6 +364,7 @@ class Log(@volatile private var _dir: File,
   /**
    * Update high watermark with offset metadata. The new high watermark will be lower
    * bounded by the log start offset and upper bounded by the log end offset.
+   * 使用 offset 信息更新高水位
    *
    * @param highWatermarkMetadata the suggested high watermark with offset metadata
    * @return the updated high watermark offset
