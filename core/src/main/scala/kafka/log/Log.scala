@@ -17,23 +17,13 @@
 
 package kafka.log
 
-import java.io.{File, IOException}
-import java.lang.{Long => JLong}
-import java.nio.file.{Files, NoSuchFileException}
-import java.text.NumberFormat
-import java.util.Map.{Entry => JEntry}
-import java.util.Optional
-import java.util.concurrent.atomic._
-import java.util.concurrent.{ConcurrentNavigableMap, ConcurrentSkipListMap, TimeUnit}
-import java.util.regex.Pattern
-
 import kafka.api.{ApiVersion, KAFKA_0_10_0_IV0}
 import kafka.common.{LogSegmentOffsetOverflowException, LongRef, OffsetsOutOfOrderException, UnexpectedAppendOffsetException}
 import kafka.message.{BrokerCompressionCodec, CompressionCodec, NoCompressionCodec}
 import kafka.metrics.KafkaMetricsGroup
+import kafka.server._
 import kafka.server.checkpoints.LeaderEpochCheckpointFile
 import kafka.server.epoch.LeaderEpochFileCache
-import kafka.server.{BrokerTopicStats, FetchDataInfo, FetchHighWatermark, FetchIsolation, FetchLogEnd, FetchTxnCommitted, LogDirFailureChannel, LogOffsetMetadata, OffsetAndEpoch}
 import kafka.utils._
 import org.apache.kafka.common.errors._
 import org.apache.kafka.common.message.FetchResponseData
@@ -45,9 +35,18 @@ import org.apache.kafka.common.requests.{EpochEndOffset, ListOffsetRequest}
 import org.apache.kafka.common.utils.{Time, Utils}
 import org.apache.kafka.common.{InvalidRecordException, KafkaException, TopicPartition}
 
-import scala.jdk.CollectionConverters._
+import java.io.{File, IOException}
+import java.lang.{Long => JLong}
+import java.nio.file.{Files, NoSuchFileException}
+import java.text.NumberFormat
+import java.util.Map.{Entry => JEntry}
+import java.util.Optional
+import java.util.concurrent.atomic._
+import java.util.concurrent.{ConcurrentNavigableMap, ConcurrentSkipListMap, TimeUnit}
+import java.util.regex.Pattern
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import scala.collection.{Seq, Set, mutable}
+import scala.jdk.CollectionConverters._
 
 object LogAppendInfo {
   val UnknownLogAppendInfo = LogAppendInfo(None, -1, RecordBatch.NO_TIMESTAMP, -1L, RecordBatch.NO_TIMESTAMP, -1L,
@@ -777,6 +776,7 @@ class Log(@volatile private var _dir: File,
 
     // Update the high watermark in case it has gotten ahead of the log end offset following a truncation
     // or if a new segment has been rolled and the offset metadata needs to be updated.
+    // 更新高水位
     if (highWatermark >= offset) {
       updateHighWatermarkMetadata(nextOffsetMetadata)
     }
@@ -1041,12 +1041,17 @@ class Log(@volatile private var _dir: File,
 
   /**
    * Append this message set to the active segment of the log, assigning offsets and Partition Leader Epochs
+   * 将消息集合追加在日志活跃的 segment 上，分配 offset 和Partition leader 的 Epoch
    *
-   * @param records The records to append
-   * @param origin Declares the origin of the append which affects required validations
+   * @param records                    The records to append
+   *                                   要追加的记录
+   * @param origin                     Declares the origin of the append which affects required validations
+   *                                   声明影响所需验证的附录的原点
    * @param interBrokerProtocolVersion Inter-broker message protocol version
+   *                                   broker 内部消息协议版本
    * @throws KafkaStorageException If the append fails due to an I/O error.
    * @return Information about the appended messages including the first and last offset.
+   *         包含第一条和最后一条消息 offset 的信息
    */
   def appendAsLeader(records: MemoryRecords,
                      leaderEpoch: Int,
@@ -1074,20 +1079,29 @@ class Log(@volatile private var _dir: File,
 
   /**
    * Append this message set to the active segment of the log, rolling over to a fresh segment if necessary.
+   * 将消息集合追加到活跃的日志段，如果需要则翻滚到新的段
    *
    * This method will generally be responsible for assigning offsets to the messages,
    * however if the assignOffsets=false flag is passed we will only check that the existing offsets are valid.
+   * 此方法通常负责向消息分配偏移，但是，如果 assignOffsets 是 false，只会检查现有的偏移是否有效。
    *
-   * @param records The log records to append
-   * @param origin Declares the origin of the append which affects required validations
+   * @param records                    The log records to append
+   *                                   追加的记录
+   * @param origin                     Declares the origin of the append which affects required validations
+   *                                   声明影响所需验证的附录的原点
    * @param interBrokerProtocolVersion Inter-broker message protocol version
-   * @param assignOffsets Should the log assign offsets to this message set or blindly apply what it is given
-   * @param leaderEpoch The partition's leader epoch which will be applied to messages when offsets are assigned on the leader
-   * @param ignoreRecordSize true to skip validation of record size.
-   * @throws KafkaStorageException If the append fails due to an I/O error.
-   * @throws OffsetsOutOfOrderException If out of order offsets found in 'records'
+   *                                   broker 内部消息协议版本
+   * @param assignOffsets              Should the log assign offsets to this message set or blindly apply what it is given
+   *                                   是否应当将分配的 offset 分配给消息
+   * @param leaderEpoch                The partition's leader epoch which will be applied to messages when offsets are assigned on the leader
+   *                                   Partition leader 的 epoch
+   * @param ignoreRecordSize           true to skip validation of record size.
+   *                                   跳过消息记录的大小校验
+   * @throws KafkaStorageException           If the append fails due to an I/O error.
+   * @throws OffsetsOutOfOrderException      If out of order offsets found in 'records'
    * @throws UnexpectedAppendOffsetException If the first or last offset in append is less than next offset
    * @return Information about the appended messages including the first and last offset.
+   *         包含追加的消息第一个和最后一个 offset 的信息
    */
   private def append(records: MemoryRecords,
                      origin: AppendOrigin,
@@ -1096,24 +1110,31 @@ class Log(@volatile private var _dir: File,
                      leaderEpoch: Int,
                      ignoreRecordSize: Boolean): LogAppendInfo = {
     maybeHandleIOException(s"Error while appending records to $topicPartition in dir ${dir.getParent}") {
+      // 校验消息大小、offset 等
       val appendInfo = analyzeAndValidateRecords(records, origin, ignoreRecordSize)
 
       // return if we have no valid messages or if this is a duplicate of the last appended entry
+      // 如果没有有效消息或是最后一条消息的附加则返回
       if (appendInfo.shallowCount == 0)
         return appendInfo
 
       // trim any invalid bytes or partial messages before appending it to the on-disk log
+      // 在写入到硬盘之前修剪无效的字节
       var validRecords = trimInvalidBytes(records, appendInfo)
 
       // they are valid, insert them in the log
       lock synchronized {
         checkIfMemoryMappedBufferClosed()
+        // 分配 offset
         if (assignOffsets) {
           // assign offsets to the message set
+          // 分配 offset
           val offset = new LongRef(nextOffsetMetadata.messageOffset)
+          // 追加的第一个 offset
           appendInfo.firstOffset = Some(offset.value)
           val now = time.milliseconds
           val validateAndOffsetAssignResult = try {
+            // 校验消息，并分配 offset
             LogValidator.validateMessagesAndAssignOffsets(validRecords,
               topicPartition,
               offset,
@@ -1138,6 +1159,7 @@ class Log(@volatile private var _dir: File,
           appendInfo.offsetOfMaxTimestamp = validateAndOffsetAssignResult.shallowOffsetOfMaxTimestamp
           appendInfo.lastOffset = offset.value - 1
           appendInfo.recordConversionStats = validateAndOffsetAssignResult.recordConversionStats
+          // 根据消息时间戳配置更新消息的时间
           if (config.messageTimestampType == TimestampType.LOG_APPEND_TIME)
             appendInfo.logAppendTime = now
 
@@ -1156,11 +1178,14 @@ class Log(@volatile private var _dir: File,
             }
           }
         } else {
+          // 不分配 offset
           // we are taking the offsets we are given
+          // 不是单调递增
           if (!appendInfo.offsetsMonotonic)
             throw new OffsetsOutOfOrderException(s"Out of order offsets found in append to $topicPartition: " +
                                                  records.records.asScala.map(_.offset))
 
+          // offset 不对
           if (appendInfo.firstOrLastOffsetOfFirstBatch < nextOffsetMetadata.messageOffset) {
             // we may still be able to recover if the log is empty
             // one example: fetching from log start offset on the leader which is not batch aligned,
@@ -1181,6 +1206,7 @@ class Log(@volatile private var _dir: File,
         }
 
         // update the epoch cache with the epoch stamped onto the message by the leader
+        // 更新 leader epoch 的时间
         validRecords.batches.forEach { batch =>
           if (batch.magic >= RecordBatch.MAGIC_VALUE_V2) {
             maybeAssignEpochStartOffset(batch.partitionLeaderEpoch, batch.baseOffset)
@@ -1196,14 +1222,17 @@ class Log(@volatile private var _dir: File,
         }
 
         // check messages set size may be exceed config.segmentSize
+        // 检查消息大小是否超过段的大小
         if (validRecords.sizeInBytes > config.segmentSize) {
           throw new RecordBatchTooLargeException(s"Message batch size is ${validRecords.sizeInBytes} bytes in append " +
             s"to partition $topicPartition, which exceeds the maximum configured segment size of ${config.segmentSize}.")
         }
 
         // maybe roll the log if this segment is full
+        // 如果当前段已经满了，则切割
         val segment = maybeRoll(validRecords.sizeInBytes, appendInfo)
 
+        // 日志 offset 元数据
         val logOffsetMetadata = LogOffsetMetadata(
           messageOffset = appendInfo.firstOrLastOffsetOfFirstBatch,
           segmentBaseOffset = segment.baseOffset,
@@ -1211,6 +1240,7 @@ class Log(@volatile private var _dir: File,
 
         // now that we have valid records, offsets assigned, and timestamps updated, we need to
         // validate the idempotent/transactional state of the producers and collect some metadata
+        // 校验消息 幂等/事务 状态
         val (updatedProducers, completedTxns, maybeDuplicate) = analyzeAndValidateProducerState(
           logOffsetMetadata, validRecords, origin)
 
@@ -1222,6 +1252,7 @@ class Log(@volatile private var _dir: File,
           return appendInfo
         }
 
+        // 将消息追加到段上
         segment.append(largestOffset = appendInfo.lastOffset,
           largestTimestamp = appendInfo.maxTimestamp,
           shallowOffsetOfMaxTimestamp = appendInfo.offsetOfMaxTimestamp,
@@ -1233,15 +1264,18 @@ class Log(@volatile private var _dir: File,
         // will be cleaned up after the log directory is recovered. Note that the end offset of the
         // ProducerStateManager will not be updated and the last stable offset will not advance
         // if the append to the transaction index fails.
+        // 更新日志结尾的 offset
         updateLogEndOffset(appendInfo.lastOffset + 1)
 
         // update the producer state
+        // 更新生产者状态
         for (producerAppendInfo <- updatedProducers.values) {
           producerStateManager.update(producerAppendInfo)
         }
 
         // update the transaction index with the true last stable offset. The last offset visible
         // to consumers using READ_COMMITTED will be limited by this value and the high watermark.
+        // 更新事务 index
         for (completedTxn <- completedTxns) {
           val lastStableOffset = producerStateManager.lastStableOffset(completedTxn)
           segment.updateTxnIndex(completedTxn, lastStableOffset)
@@ -1260,6 +1294,7 @@ class Log(@volatile private var _dir: File,
           s"next offset: ${nextOffsetMetadata.messageOffset}, " +
           s"and messages: $validRecords")
 
+        // 将日志落盘
         if (unflushedMessages >= config.flushInterval)
           flush()
 
@@ -1370,6 +1405,10 @@ class Log(@volatile private var _dir: File,
    * <li> each message size is valid (if ignoreRecordSize is false)
    * <li> that the sequence numbers of the incoming record batches are consistent with the existing state and with each other.
    * </ol>
+   * 校验以下信息 :
+   * 1. 消息的 CRC
+   * 2. 每个消息的大小
+   * 3. 消息的序号一致
    *
    * Also compute the following quantities:
    * <ol>
@@ -1380,6 +1419,13 @@ class Log(@volatile private var _dir: File,
    * <li> Whether the offsets are monotonically increasing
    * <li> Whether any compression codec is used (if many are used, then the last one is given)
    * </ol>
+   * 同时会计算以下数量：
+   * 1. 消息集合的第一个 offset
+   * 2. 消息集合的最后一个 offset
+   * 3. 消息的数量
+   * 4. 有效的字节数量
+   * 5. offset 单调是否递增
+   * 6. 是否有使用压缩
    */
   private def analyzeAndValidateRecords(records: MemoryRecords,
                                         origin: AppendOrigin,
@@ -1466,9 +1512,10 @@ class Log(@volatile private var _dir: File,
 
   /**
    * Trim any invalid bytes from the end of this message set (if there are any)
+   * 修剪消息中无效的字节
    *
    * @param records The records to trim
-   * @param info The general information of the message set
+   * @param info    The general information of the message set
    * @return A trimmed message set. This may be the same as what was passed in or it may not.
    */
   private def trimInvalidBytes(records: MemoryRecords, info: LogAppendInfo): MemoryRecords = {
@@ -1867,6 +1914,7 @@ class Log(@volatile private var _dir: File,
 
   /**
    * Roll the log over to a new empty log segment if necessary.
+   * 如果必要，则切割日志，创建新的空日志段
    *
    * @param messagesSize The messages set size in bytes.
    * @param appendInfo log append information
@@ -1886,6 +1934,7 @@ class Log(@volatile private var _dir: File,
     val maxTimestampInMessages = appendInfo.maxTimestamp
     val maxOffsetInMessages = appendInfo.lastOffset
 
+    // 检查是否需要切割
     if (segment.shouldRoll(RollParams(config, appendInfo, messagesSize, now))) {
       debug(s"Rolling new log segment (log_size = ${segment.size}/${config.segmentSize}}, " +
         s"offset_index_size = ${segment.offsetIndex.entries}/${segment.offsetIndex.maxEntries}, " +
@@ -1904,6 +1953,7 @@ class Log(@volatile private var _dir: File,
         Note that this is only required for pre-V2 message formats because these do not store the first message offset
         in the header.
       */
+      // 创建新的段
       appendInfo.firstOffset match {
         case Some(firstOffset) => roll(Some(firstOffset))
         case None => roll(Some(maxOffsetInMessages - Integer.MAX_VALUE))

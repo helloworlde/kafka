@@ -78,8 +78,12 @@ public class MemoryRecords extends AbstractRecords {
 
     /**
      * Write all records to the given channel (including partial records).
+     * 将消息内容写入给定的 Channel
+     *
      * @param channel The channel to write to
+     *                要写入的 Channel
      * @return The number of bytes written
+     * 写入的字节长度
      * @throws IOException For any IO errors writing to the channel
      */
     public int writeFullyTo(GatheringByteChannel channel) throws IOException {

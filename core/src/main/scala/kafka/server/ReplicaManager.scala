@@ -605,6 +605,7 @@ class ReplicaManager(val config: KafkaConfig,
    * Append messages to leader replicas of the partition, and wait for them to be replicated to other replicas;
    * the callback function will be triggered either when timeout or the required acks are satisfied;
    * if the callback function itself is already synchronized on some object then pass this object to avoid deadlock.
+   * 将消息追加在 Partition 的 leader 副本上，等待其他副本同步，当超时或者要求的 ack 完成时会触发回调
    *
    * Noted that all pending delayed check operations are stored in a queue. All callers to ReplicaManager.appendRecords()
    * are expected to call ActionQueue.tryCompleteActions for all affected partitions, without holding any conflicting
@@ -618,12 +619,16 @@ class ReplicaManager(val config: KafkaConfig,
                     responseCallback: Map[TopicPartition, PartitionResponse] => Unit,
                     delayedProduceLock: Option[Lock] = None,
                     recordConversionStatsCallback: Map[TopicPartition, RecordConversionStats] => Unit = _ => ()): Unit = {
+
+    // 检查 ack 数量是否有效
     if (isValidRequiredAcks(requiredAcks)) {
       val sTime = time.milliseconds
+      // 追加本地日志
       val localProduceResults = appendToLocalLog(internalTopicsAllowed = internalTopicsAllowed,
         origin, entriesPerPartition, requiredAcks)
       debug("Produce to local log in %d ms".format(time.milliseconds - sTime))
 
+      // 更新状态
       val produceStatus = localProduceResults.map { case (topicPartition, result) =>
         topicPartition ->
                 ProducePartitionStatus(
@@ -636,14 +641,17 @@ class ReplicaManager(val config: KafkaConfig,
         () =>
           localProduceResults.foreach {
             case (topicPartition, result) =>
+              // 处理高水位变化
               val requestKey = TopicPartitionOperationKey(topicPartition)
               result.info.leaderHwChange match {
+                  // 高水位增加
                 case LeaderHwChange.Increased =>
                   // some delayed operations may be unblocked after HW changed
                   delayedProducePurgatory.checkAndComplete(requestKey)
                   delayedFetchPurgatory.checkAndComplete(requestKey)
                   delayedDeleteRecordsPurgatory.checkAndComplete(requestKey)
                 case LeaderHwChange.Same =>
+                  // 高水位相同
                   // probably unblock some follower fetch requests since log end offset has been updated
                   delayedFetchPurgatory.checkAndComplete(requestKey)
                 case LeaderHwChange.None =>
@@ -652,10 +660,13 @@ class ReplicaManager(val config: KafkaConfig,
           }
       }
 
+      // 格式版本转换回调
       recordConversionStatsCallback(localProduceResults.map { case (k, v) => k -> v.info.recordConversionStats })
 
+      // 如果需要延迟处理
       if (delayedProduceRequestRequired(requiredAcks, entriesPerPartition, localProduceResults)) {
         // create delayed produce operation
+        // 创建一个延迟操作
         val produceMetadata = ProduceMetadata(requiredAcks, produceStatus)
         val delayedProduce = new DelayedProduce(timeout, produceMetadata, this, responseCallback, delayedProduceLock)
 
@@ -669,10 +680,13 @@ class ReplicaManager(val config: KafkaConfig,
 
       } else {
         // we can respond immediately
+        // 立即响应
         val produceResponseStatus = produceStatus.map { case (k, status) => k -> status.responseStatus }
+        // 触发响应回调
         responseCallback(produceResponseStatus)
       }
     } else {
+      // ack 无效，返回错误
       // If required.acks is outside accepted range, something is wrong with the client
       // Just return an error and don't handle the request at all
       val responseStatus = entriesPerPartition.map { case (topicPartition, _) =>
@@ -902,10 +916,13 @@ class ReplicaManager(val config: KafkaConfig,
   }
 
   // If all the following conditions are true, we need to put a delayed produce request and wait for replication to complete
-  //
   // 1. required acks = -1
   // 2. there is data to append
   // 3. at least one partition append was successful (fewer errors than partitions)
+  // 如果以下所有的条件都是 true，我们需要延迟请求处理，等待复制完成
+  // 1. acks = -1
+  // 2. 有日志需要追加
+  // 3. 有至少一个 Partition 追加成功
   private def delayedProduceRequestRequired(requiredAcks: Short,
                                             entriesPerPartition: Map[TopicPartition, MemoryRecords],
                                             localProduceResults: Map[TopicPartition, LogAppendResult]): Boolean = {
@@ -920,12 +937,14 @@ class ReplicaManager(val config: KafkaConfig,
 
   /**
    * Append the messages to the local replica logs
+   * 将消息追加到本地的日志中
    */
   private def appendToLocalLog(internalTopicsAllowed: Boolean,
                                origin: AppendOrigin,
                                entriesPerPartition: Map[TopicPartition, MemoryRecords],
                                requiredAcks: Short): Map[TopicPartition, LogAppendResult] = {
     val traceEnabled = isTraceEnabled
+    // 处理失败
     def processFailedRecord(topicPartition: TopicPartition, t: Throwable) = {
       val logStartOffset = getPartition(topicPartition) match {
         case HostedPartition.Online(partition) => partition.logStartOffset
@@ -946,17 +965,21 @@ class ReplicaManager(val config: KafkaConfig,
       brokerTopicStats.allTopicsStats.totalProduceRequestRate.mark()
 
       // reject appending to internal topics if it is not allowed
+      // 内部 Topic 不允许追加
       if (Topic.isInternal(topicPartition.topic) && !internalTopicsAllowed) {
         (topicPartition, LogAppendResult(
           LogAppendInfo.UnknownLogAppendInfo,
           Some(new InvalidTopicException(s"Cannot append to internal topic ${topicPartition.topic}"))))
       } else {
         try {
+          // 获取 Partition
           val partition = getPartitionOrException(topicPartition)
+          // 将消息写入日志，校验后分配 offset，然后写入日志文件
           val info = partition.appendRecordsToLeader(records, origin, requiredAcks)
           val numAppendedMessages = info.numMessages
 
           // update stats for successfully appended bytes and messages as bytesInRate and messageInRate
+          // 更新统计
           brokerTopicStats.topicStats(topicPartition.topic).bytesInRate.mark(records.sizeInBytes)
           brokerTopicStats.allTopicsStats.bytesInRate.mark(records.sizeInBytes)
           brokerTopicStats.topicStats(topicPartition.topic).messagesInRate.mark(numAppendedMessages)
