@@ -38,6 +38,7 @@ public class LazyDownConversionRecords implements BaseRecords {
     private final Time time;
 
     /**
+     * 延迟降级响应数据
      * @param topicPartition The topic-partition to which records belong
      * @param records Records to lazily down-convert
      * @param toMagic Magic version to down-convert to

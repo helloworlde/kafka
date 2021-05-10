@@ -440,6 +440,7 @@ class Partition(val topicPartition: TopicPartition,
 
   private def getLocalLog(currentLeaderEpoch: Optional[Integer],
                           requireLeader: Boolean): Either[Log, Errors] = {
+    // 检查 leader 的 epoch
     checkCurrentLeaderEpoch(currentLeaderEpoch) match {
       case Errors.NONE =>
         if (requireLeader && !isLeader) {
@@ -476,6 +477,12 @@ class Partition(val topicPartition: TopicPartition,
    */
   def isLeader: Boolean = leaderReplicaIdOpt.contains(localBrokerId)
 
+  /**
+   * 决定是否仅从 leader 读取
+   * @param currentLeaderEpoch
+   * @param requireLeader
+   * @return
+   */
   private def localLogWithEpochOrException(currentLeaderEpoch: Optional[Integer],
                                            requireLeader: Boolean): Log = {
     getLocalLog(currentLeaderEpoch, requireLeader) match {
@@ -1134,6 +1141,17 @@ class Partition(val topicPartition: TopicPartition,
     info.copy(leaderHwChange = if (leaderHWIncremented) LeaderHwChange.Increased else LeaderHwChange.Same)
   }
 
+  /**
+   * 读取记录
+   * @param lastFetchedEpoch
+   * @param fetchOffset
+   * @param currentLeaderEpoch
+   * @param maxBytes
+   * @param fetchIsolation
+   * @param fetchOnlyFromLeader
+   * @param minOneMessage
+   * @return
+   */
   def readRecords(lastFetchedEpoch: Optional[Integer],
                   fetchOffset: Long,
                   currentLeaderEpoch: Optional[Integer],
@@ -1142,6 +1160,7 @@ class Partition(val topicPartition: TopicPartition,
                   fetchOnlyFromLeader: Boolean,
                   minOneMessage: Boolean): LogReadInfo = inReadLock(leaderIsrUpdateLock) {
     // decide whether to only fetch from leader
+    // 决定是否仅从 leader 读取
     val localLog = localLogWithEpochOrException(currentLeaderEpoch, fetchOnlyFromLeader)
 
     // Note we use the log end offset prior to the read. This ensures that any appends following
@@ -1152,6 +1171,7 @@ class Partition(val topicPartition: TopicPartition,
     val initialLastStableOffset = localLog.lastStableOffset
 
     lastFetchedEpoch.ifPresent { fetchEpoch =>
+      // epoch 的 endOffset
       val epochEndOffset = lastOffsetForLeaderEpoch(currentLeaderEpoch, fetchEpoch, fetchOnlyFromLeader = false)
       if (epochEndOffset.error != Errors.NONE) {
         throw epochEndOffset.error.exception()
@@ -1162,6 +1182,7 @@ class Partition(val topicPartition: TopicPartition,
           s"$lastFetchedEpoch from the request")
       }
 
+      // leader 的 epoch 小于要拉取的 epoch 或者 endOffset 小于要拉取的 offset，则返回空
       if (epochEndOffset.leaderEpoch < fetchEpoch || epochEndOffset.endOffset < fetchOffset) {
         val emptyFetchData = FetchDataInfo(
           fetchOffsetMetadata = LogOffsetMetadata(fetchOffset),
@@ -1184,6 +1205,7 @@ class Partition(val topicPartition: TopicPartition,
       }
     }
 
+    // 拉取数据
     val fetchedData = localLog.read(fetchOffset, maxBytes, fetchIsolation, minOneMessage)
     LogReadInfo(
       fetchedData = fetchedData,
@@ -1240,6 +1262,12 @@ class Partition(val topicPartition: TopicPartition,
     }
   }
 
+  /**
+   * 从日志读取
+   * @param currentLeaderEpoch
+   * @param fetchOnlyFromLeader
+   * @return
+   */
   def fetchOffsetSnapshot(currentLeaderEpoch: Optional[Integer],
                           fetchOnlyFromLeader: Boolean): LogOffsetSnapshot = inReadLock(leaderIsrUpdateLock) {
     // decide whether to only fetch from leader

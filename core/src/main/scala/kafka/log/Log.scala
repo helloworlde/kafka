@@ -414,6 +414,7 @@ class Log(@volatile private var _dir: File,
   /**
    * Get the offset and metadata for the current high watermark. If offset metadata is not
    * known, this will do a lookup in the index and cache the result.
+   * 获取高水位的数据，如果 offset 信息未知，则查找索引和缓存中查找
    */
   private def fetchHighWatermarkMetadata: LogOffsetMetadata = {
     checkIfMemoryMappedBufferClosed()
@@ -421,7 +422,9 @@ class Log(@volatile private var _dir: File,
     val offsetMetadata = highWatermarkMetadata
     if (offsetMetadata.messageOffsetOnly) {
       lock.synchronized {
+        // 读取
         val fullOffset = convertToOffsetMetadataOrThrow(highWatermark)
+        // 更新高水位
         updateHighWatermarkMetadata(fullOffset)
         fullOffset
       }
@@ -430,6 +433,10 @@ class Log(@volatile private var _dir: File,
     }
   }
 
+  /**
+   * 更新高水位
+   * @param newHighWatermark
+   */
   private def updateHighWatermarkMetadata(newHighWatermark: LogOffsetMetadata): Unit = {
     if (newHighWatermark.messageOffset < 0)
       throw new IllegalArgumentException("High watermark offset should be non-negative")
@@ -1533,6 +1540,12 @@ class Log(@volatile private var _dir: File,
     }
   }
 
+  /**
+   * 创建空数据集合
+   * @param fetchOffsetMetadata
+   * @param includeAbortedTxns
+   * @return
+   */
   private def emptyFetchDataInfo(fetchOffsetMetadata: LogOffsetMetadata,
                                  includeAbortedTxns: Boolean): FetchDataInfo = {
     val abortedTransactions =
@@ -1546,13 +1559,19 @@ class Log(@volatile private var _dir: File,
 
   /**
    * Read messages from the log.
+   * 从日志中读取数据
    *
    * @param startOffset The offset to begin reading at
+   *                    开始读取的 offset
    * @param maxLength The maximum number of bytes to read
+   *                  字节读取的最大长度
    * @param isolation The fetch isolation, which controls the maximum offset we are allowed to read
+   *                  隔离级别，控制可以读取的最大字节位置
    * @param minOneMessage If this is true, the first message will be returned even if it exceeds `maxLength` (if one exists)
+   *                      如果是 true，即使超过 maxLength，也会返回第一条消息
    * @throws OffsetOutOfRangeException If startOffset is beyond the log end offset or before the log start offset
    * @return The fetch data information including fetch starting offset metadata and messages read.
+   *         包含开始位置的 metadata 和读取的消息的信息
    */
   def read(startOffset: Long,
            maxLength: Int,
@@ -1562,6 +1581,7 @@ class Log(@volatile private var _dir: File,
       trace(s"Reading maximum $maxLength bytes at offset $startOffset from log with " +
         s"total length $size bytes")
 
+      // 包含回滚的事务
       val includeAbortedTxns = isolation == FetchTxnCommitted
 
       // Because we don't use the lock for reading, the synchronization is a little bit tricky.
@@ -1575,12 +1595,14 @@ class Log(@volatile private var _dir: File,
         throw new OffsetOutOfRangeException(s"Received request for offset $startOffset for partition $topicPartition, " +
           s"but we only have log segments in the range $logStartOffset to $endOffset.")
 
+      // 可以读取的最大 offset
       val maxOffsetMetadata = isolation match {
         case FetchLogEnd => endOffsetMetadata
         case FetchHighWatermark => fetchHighWatermarkMetadata
         case FetchTxnCommitted => fetchLastStableOffsetMetadata
       }
 
+      // 如果已经达到或超过最大字节了，则返回空集合
       if (startOffset == maxOffsetMetadata.messageOffset) {
         return emptyFetchDataInfo(maxOffsetMetadata, includeAbortedTxns)
       } else if (startOffset > maxOffsetMetadata.messageOffset) {
@@ -1591,9 +1613,11 @@ class Log(@volatile private var _dir: File,
       // Do the read on the segment with a base offset less than the target offset
       // but if that segment doesn't contain any messages with an offset greater than that
       // continue to read from successive segments until we get some messages or we reach the end of the log
+      // 从段上读取，如果当前段没有数据了，则从后续的段继续读取直到获取到数据或者读取完日志
       while (segmentEntry != null) {
         val segment = segmentEntry.getValue
 
+        // 最大位置
         val maxPosition = {
           // Use the max offset position if it is on this segment; otherwise, the segment size is the limit.
           if (maxOffsetMetadata.segmentBaseOffset == segment.baseOffset) {
@@ -1603,10 +1627,13 @@ class Log(@volatile private var _dir: File,
           }
         }
 
+        // 从段上读取数据
+        // TODO Here
         val fetchInfo = segment.read(startOffset, maxLength, maxPosition, minOneMessage)
         if (fetchInfo == null) {
           segmentEntry = segments.higherEntry(segmentEntry.getKey)
         } else {
+          // 如果包含事务日志，则添加事务日志
           return if (includeAbortedTxns)
             addAbortedTransactions(startOffset, segmentEntry, fetchInfo)
           else
@@ -1764,8 +1791,10 @@ class Log(@volatile private var _dir: File,
   /**
     * Given a message offset, find its corresponding offset metadata in the log.
     * If the message offset is out of range, throw an OffsetOutOfRangeException
+    *  根据给定的 offset，查找日志中相应的数据
     */
   private def convertToOffsetMetadataOrThrow(offset: Long): LogOffsetMetadata = {
+    // 读取
     val fetchDataInfo = read(offset,
       maxLength = 1,
       isolation = FetchLogEnd,

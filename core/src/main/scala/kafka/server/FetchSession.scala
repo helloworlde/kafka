@@ -372,10 +372,17 @@ class FullFetchContext(private val time: Time,
     FetchResponse.sizeOf(versionId, updates.entrySet.iterator)
   }
 
+  /**
+   * 全量拉取
+   * @param updates
+   * @return
+   */
   override def updateAndGenerateResponseData(updates: FetchSession.RESP_MAP): FetchResponse[Records] = {
+    // 创建新的 session
     def createNewSession: FetchSession.CACHE_MAP = {
       val cachedPartitions = new FetchSession.CACHE_MAP(updates.size)
       updates.forEach { (part, respData) =>
+        // 获取数据
         val reqData = fetchData.get(part)
         cachedPartitions.mustAdd(new CachedPartition(part, reqData, respData))
       }
@@ -463,11 +470,17 @@ class IncrementalFetchContext(private val time: Time,
     }
   }
 
+  /**
+   * 增量拉取数据
+   * @param updates
+   * @return
+   */
   override def updateAndGenerateResponseData(updates: FetchSession.RESP_MAP): FetchResponse[Records] = {
     session.synchronized {
       // Check to make sure that the session epoch didn't change in between
       // creating this fetch context and generating this response.
       val expectedEpoch = JFetchMetadata.nextEpoch(reqMetadata.epoch)
+      // Epoch 不匹配
       if (session.epoch != expectedEpoch) {
         info(s"Incremental fetch session ${session.id} expected epoch $expectedEpoch, but " +
           s"got ${session.epoch}.  Possible duplicate request.")

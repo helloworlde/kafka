@@ -137,6 +137,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       request.header.apiKey match {
         // 接收到新的消息
         case ApiKeys.PRODUCE => handleProduceRequest(request)
+        // 拉取数据
         case ApiKeys.FETCH => handleFetchRequest(request)
         case ApiKeys.LIST_OFFSETS => handleListOffsetRequest(request)
         case ApiKeys.METADATA => handleTopicMetadataRequest(request)
@@ -657,17 +658,20 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   /**
    * Handle a fetch request
+   * 处理拉取数据请求
    */
   def handleFetchRequest(request: RequestChannel.Request): Unit = {
     val versionId = request.header.apiVersion
     val clientId = request.header.clientId
     val fetchRequest = request.body[FetchRequest]
+    // 初始化上下文
     val fetchContext = fetchManager.newContext(
       fetchRequest.metadata,
       fetchRequest.fetchData,
       fetchRequest.toForget,
       fetchRequest.isFromFollower)
 
+    // apiVersion 大于等于 11 时初始化 metadata
     val clientMetadata: Option[ClientMetadata] = if (versionId >= 11) {
       // Fetch API version 11 added preferred replica logic
       Some(new DefaultClientMetadata(
@@ -680,6 +684,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       None
     }
 
+    // 错误响应
     def errorResponse[T >: MemoryRecords <: BaseRecords](error: Errors): FetchResponse.PartitionData[T] = {
       new FetchResponse.PartitionData[T](error, FetchResponse.INVALID_HIGHWATERMARK, FetchResponse.INVALID_LAST_STABLE_OFFSET,
         FetchResponse.INVALID_LOG_START_OFFSET, null, MemoryRecords.EMPTY)
@@ -687,8 +692,10 @@ class KafkaApis(val requestChannel: RequestChannel,
 
     val erroneous = mutable.ArrayBuffer[(TopicPartition, FetchResponse.PartitionData[Records])]()
     val interesting = mutable.ArrayBuffer[(TopicPartition, FetchRequest.PartitionData)]()
+    // Follower 的拉取请求，检查授权
     if (fetchRequest.isFromFollower) {
       // The follower must have ClusterAction on ClusterResource in order to fetch partition data.
+      // 要求 Follower 必须有 ClusterResource 上的 ClusterAction 用于拉取 Partition 的数据授权
       if (authorize(request.context, CLUSTER_ACTION, CLUSTER, CLUSTER_NAME)) {
         fetchContext.foreachPartition { (topicPartition, data) =>
           if (!metadataCache.contains(topicPartition))
@@ -703,10 +710,12 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
     } else {
       // Regular Kafka consumers need READ permission on each partition they are fetching.
+      // 普通的消费者需拉取的 Partition 的读取权限
       val partitionDatas = new mutable.ArrayBuffer[(TopicPartition, FetchRequest.PartitionData)]
       fetchContext.foreachPartition { (topicPartition, partitionData) =>
         partitionDatas += topicPartition -> partitionData
       }
+      // 检查授权
       val authorizedTopics = filterByAuthorized(request.context, READ, TOPIC, partitionDatas)(_._1.topic)
       partitionDatas.foreach { case (topicPartition, data) =>
         if (!authorizedTopics.contains(topicPartition.topic))
@@ -718,6 +727,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
     }
 
+    // apiVersion 是 5 及之前的版本
     def maybeDownConvertStorageError(error: Errors, version: Short): Errors = {
       // If consumer sends FetchRequest V5 or earlier, the client library is not guaranteed to recognize the error code
       // for KafkaStorageException. In this case the client library will translate KafkaStorageException to
@@ -730,10 +740,13 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
     }
 
+    // 转换拉取到的数据
     def maybeConvertFetchedData(tp: TopicPartition,
                                 partitionData: FetchResponse.PartitionData[Records]): FetchResponse.PartitionData[BaseRecords] = {
+      // 获取配置
       val logConfig = replicaManager.getLogConfig(tp)
 
+      // apiVersion 10 之前不支持压缩
       if (logConfig.exists(_.compressionType == ZStdCompressionCodec.name) && versionId < 10) {
         trace(s"Fetching messages is disabled for ZStandard compressed partition $tp. Sending unsupported version response to $clientId.")
         errorResponse(Errors.UNSUPPORTED_COMPRESSION_TYPE)
@@ -746,6 +759,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         // lower version, this check will no longer be valid and we will fail to down-convert the messages
         // which were written in the new format prior to the version downgrade.
         val unconvertedRecords = partitionData.records
+        // 降级的 magic
         val downConvertMagic =
           logConfig.map(_.messageFormatVersion.recordVersion.value).flatMap { magic =>
             if (magic > RecordBatch.MAGIC_VALUE_V0 && versionId <= 1 && !unconvertedRecords.hasCompatibleMagic(RecordBatch.MAGIC_VALUE_V0))
@@ -759,6 +773,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         downConvertMagic match {
           case Some(magic) =>
             // For fetch requests from clients, check if down-conversion is disabled for the particular partition
+            // 检查客户端是否支持降级
             if (!fetchRequest.isFromFollower && !logConfig.forall(_.messageDownConversionEnable)) {
               trace(s"Conversion to message format ${downConvertMagic.get} is disabled for partition $tp. Sending unsupported version response to $clientId.")
               errorResponse(Errors.UNSUPPORTED_VERSION)
@@ -770,6 +785,7 @@ class KafkaApis(val requestChannel: RequestChannel,
                 // down-conversion always guarantees that at least one batch of messages is down-converted and sent out to the
                 // client.
                 val error = maybeDownConvertStorageError(partitionData.error, versionId)
+                // 响应数据
                 new FetchResponse.PartitionData[BaseRecords](error, partitionData.highWatermark,
                   partitionData.lastStableOffset, partitionData.logStartOffset,
                   partitionData.preferredReadReplica, partitionData.abortedTransactions,
@@ -782,6 +798,7 @@ class KafkaApis(val requestChannel: RequestChannel,
             }
           case None =>
             val error = maybeDownConvertStorageError(partitionData.error, versionId)
+            // 响应
             new FetchResponse.PartitionData[BaseRecords](error,
               partitionData.highWatermark,
               partitionData.lastStableOffset,
@@ -795,6 +812,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
 
     // the callback for process a fetch response, invoked before throttling
+    // 响应回调
     def processResponseCallback(responsePartitionData: Seq[(TopicPartition, FetchPartitionData)]): Unit = {
       val partitions = new util.LinkedHashMap[TopicPartition, FetchResponse.PartitionData[Records]]
       val reassigningPartitions = mutable.Set[TopicPartition]()
@@ -818,6 +836,7 @@ class KafkaApis(val requestChannel: RequestChannel,
 
       var unconvertedFetchResponse: FetchResponse[Records] = null
 
+      // 创建响应
       def createResponse(throttleTimeMs: Int): FetchResponse[BaseRecords] = {
         // Down-convert messages for each partition if required
         val convertedData = new util.LinkedHashMap[TopicPartition, FetchResponse.PartitionData[BaseRecords]]
@@ -825,10 +844,12 @@ class KafkaApis(val requestChannel: RequestChannel,
           if (unconvertedPartitionData.error != Errors.NONE)
             debug(s"Fetch request with correlation id ${request.header.correlationId} from client $clientId " +
               s"on partition $tp failed due to ${unconvertedPartitionData.error.exceptionName}")
+          // 转换数据
           convertedData.put(tp, maybeConvertFetchedData(tp, unconvertedPartitionData))
         }
 
         // Prepare fetch response from converted data
+        // 响应
         val response = new FetchResponse(unconvertedFetchResponse.error, convertedData, throttleTimeMs,
           unconvertedFetchResponse.sessionId)
         // record the bytes out metrics only when the response is being sent
@@ -848,13 +869,16 @@ class KafkaApis(val requestChannel: RequestChannel,
         }
       }
 
+      // Follower 拉取
       if (fetchRequest.isFromFollower) {
         // We've already evaluated against the quota and are good to go. Just need to record it now.
+        // 已经分配了，直接获取数据
         unconvertedFetchResponse = fetchContext.updateAndGenerateResponseData(partitions)
         val responseSize = sizeOfThrottledPartitions(versionId, unconvertedFetchResponse, quotas.leader)
         quotas.leader.record(responseSize)
         trace(s"Sending Fetch response with partitions.size=${unconvertedFetchResponse.responseData.size}, " +
           s"metadata=${unconvertedFetchResponse.sessionId}")
+        // 发送响应
         sendResponseExemptThrottle(request, createResponse(0), Some(updateConversionStats))
       } else {
         // Fetch size used to determine throttle time is calculated before any down conversions.
@@ -870,6 +894,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         val bandwidthThrottleTimeMs = quotas.fetch.maybeRecordAndGetThrottleTimeMs(request, responseSize, timeMs)
 
         val maxThrottleTimeMs = math.max(bandwidthThrottleTimeMs, requestThrottleTimeMs)
+        // 节流
         if (maxThrottleTimeMs > 0) {
           request.apiThrottleTimeMs = maxThrottleTimeMs
           // Even if we need to throttle for request quota violation, we should "unrecord" the already recorded value
@@ -881,14 +906,17 @@ class KafkaApis(val requestChannel: RequestChannel,
             quotas.request.throttle(request, requestThrottleTimeMs, requestChannel.sendResponse)
           }
           // If throttling is required, return an empty response.
+          // 如果节流，返回空的响应
           unconvertedFetchResponse = fetchContext.getThrottledResponse(maxThrottleTimeMs)
         } else {
           // Get the actual response. This will update the fetch context.
+          // 获取真实的响应
           unconvertedFetchResponse = fetchContext.updateAndGenerateResponseData(partitions)
           trace(s"Sending Fetch response with partitions.size=$responseSize, metadata=${unconvertedFetchResponse.sessionId}")
         }
 
         // Send the response immediately.
+        // 发送响应
         sendResponse(request, Some(createResponse(maxThrottleTimeMs)), Some(updateConversionStats))
       }
     }
@@ -901,12 +929,14 @@ class KafkaApis(val requestChannel: RequestChannel,
     else
       quotas.fetch.getMaxValueInQuotaWindow(request.session, clientId).toInt
 
+    // 拉取限制
     val fetchMaxBytes = Math.min(Math.min(fetchRequest.maxBytes, config.fetchMaxBytes), maxQuotaWindowBytes)
     val fetchMinBytes = Math.min(fetchRequest.minBytes, fetchMaxBytes)
     if (interesting.isEmpty)
       processResponseCallback(Seq.empty)
     else {
       // call the replica manager to fetch messages from the local replica
+      // 拉取数据
       replicaManager.fetchMessages(
         fetchRequest.maxWait.toLong,
         fetchRequest.replicaId,

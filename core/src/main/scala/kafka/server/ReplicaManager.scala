@@ -1035,6 +1035,9 @@ class ReplicaManager(val config: KafkaConfig,
    * Fetch messages from a replica, and wait until enough data can be fetched and return;
    * the callback function will be triggered either when timeout or required fetch info is satisfied.
    * Consumers may fetch from any replica, but followers can only fetch from the leader.
+   *
+   * 从副本中拉取数据，等待直到有足够的数据拉取到并返回；当超时或拉取到需要的数据时执行响应回调
+   * 消费者可以从任意副本拉取，Follower 只能从 Leader 拉取
    */
   def fetchMessages(timeout: Long,
                     replicaId: Int,
@@ -1046,8 +1049,13 @@ class ReplicaManager(val config: KafkaConfig,
                     responseCallback: Seq[(TopicPartition, FetchPartitionData)] => Unit,
                     isolationLevel: IsolationLevel,
                     clientMetadata: Option[ClientMetadata]): Unit = {
+    // 是否是 Follower
     val isFromFollower = Request.isValidBrokerId(replicaId)
+    // 是否是 Consumer
     val isFromConsumer = !(isFromFollower || replicaId == Request.FutureLocalReplicaId)
+    // 如果是 Follower，则从日志结尾拉取
+    // 如果隔离级别是 READ_COMMITTED，则从提交的位置拉取
+    // 否则拉取高水位
     val fetchIsolation = if (!isFromConsumer)
       FetchLogEnd
     else if (isolationLevel == IsolationLevel.READ_COMMITTED)
@@ -1056,8 +1064,11 @@ class ReplicaManager(val config: KafkaConfig,
       FetchHighWatermark
 
     // Restrict fetching to leader if request is from follower or from a client with older version (no ClientMetadata)
+    // 如果是 Follower 或者低版本，则从 Leader 拉取
     val fetchOnlyFromLeader = isFromFollower || (isFromConsumer && clientMetadata.isEmpty)
+    // 读取日志
     def readFromLog(): Seq[(TopicPartition, LogReadResult)] = {
+      // 从本地日志读取
       val result = readFromLocalLog(
         replicaId = replicaId,
         fetchOnlyFromLeader = fetchOnlyFromLeader,
@@ -1071,6 +1082,7 @@ class ReplicaManager(val config: KafkaConfig,
       else result
     }
 
+    // 拉取日志
     val logReadResults = readFromLog()
 
     // check if this fetch request can be satisfied right away
@@ -1078,6 +1090,7 @@ class ReplicaManager(val config: KafkaConfig,
     var errorReadingData = false
     var hasDivergingEpoch = false
     val logReadResultMap = new mutable.HashMap[TopicPartition, LogReadResult]
+    // 统计
     logReadResults.foreach { case (topicPartition, logReadResult) =>
       brokerTopicStats.topicStats(topicPartition.topic).totalFetchRequestRate.mark()
       brokerTopicStats.allTopicsStats.totalFetchRequestRate.mark()
@@ -1095,7 +1108,14 @@ class ReplicaManager(val config: KafkaConfig,
     //                        3) has enough data to respond
     //                        4) some error happens while reading data
     //                        5) we found a diverging epoch
+    // 以下情况立即响应：
+    // 1. 拉取请求要求不等待
+    // 2. 拉取请求不要求任何数据
+    // 3. 已经有足够的数据响应
+    // 4. 读取数据时发生错误
+    // 5. 有发散的 epoch
     if (timeout <= 0 || fetchInfos.isEmpty || bytesReadable >= fetchMinBytes || errorReadingData || hasDivergingEpoch) {
+      // 立即响应
       val fetchPartitionData = logReadResults.map { case (tp, result) =>
         val isReassignmentFetch = isFromFollower && isAddingReplica(tp, replicaId)
         tp -> FetchPartitionData(
@@ -1112,6 +1132,7 @@ class ReplicaManager(val config: KafkaConfig,
       responseCallback(fetchPartitionData)
     } else {
       // construct the fetch results from the read results
+      // 从读取的结果组织响应结果
       val fetchPartitionStatus = new mutable.ArrayBuffer[(TopicPartition, FetchPartitionStatus)]
       fetchInfos.foreach { case (topicPartition, partitionData) =>
         logReadResultMap.get(topicPartition).foreach(logReadResult => {
@@ -1136,6 +1157,7 @@ class ReplicaManager(val config: KafkaConfig,
 
   /**
    * Read from multiple topic partitions at the given offset up to maxSize bytes
+   * 从 Topic 的多个 Partition 的指定位置拉取，直到达到最大的字节限制
    */
   def readFromLocalLog(replicaId: Int,
                        fetchOnlyFromLeader: Boolean,
@@ -1147,6 +1169,7 @@ class ReplicaManager(val config: KafkaConfig,
                        clientMetadata: Option[ClientMetadata]): Seq[(TopicPartition, LogReadResult)] = {
     val traceEnabled = isTraceEnabled
 
+    // 读取
     def read(tp: TopicPartition, fetchInfo: PartitionData, limitBytes: Int, minOneMessage: Boolean): LogReadResult = {
       val offset = fetchInfo.fetchOffset
       val partitionFetchSize = fetchInfo.maxBytes
@@ -1163,17 +1186,21 @@ class ReplicaManager(val config: KafkaConfig,
         val fetchTimeMs = time.milliseconds
 
         // If we are the leader, determine the preferred read-replica
-        // 选择偏好读取的副本
+        // 根据客户端的 metadata，请求的 offset，当前的 offset，决定偏好读取的 Partition 副本
+        // 支持就近读取，即根据 rackId 读取相同 Region 的副本
         val preferredReadReplica = clientMetadata.flatMap(
           metadata => findPreferredReadReplica(partition, metadata, replicaId, fetchInfo.fetchOffset, fetchTimeMs))
 
+        // 如果有偏好，则从偏好的副本读取
         if (preferredReadReplica.isDefined) {
           replicaSelectorOpt.foreach { selector =>
             debug(s"Replica selector ${selector.getClass.getSimpleName} returned preferred replica " +
               s"${preferredReadReplica.get} for $clientMetadata")
           }
           // If a preferred read-replica is set, skip the read
+          // 读取
           val offsetSnapshot = partition.fetchOffsetSnapshot(fetchInfo.currentLeaderEpoch, fetchOnlyFromLeader = false)
+          // 读取结果
           LogReadResult(info = FetchDataInfo(LogOffsetMetadata.UnknownOffsetMetadata, MemoryRecords.EMPTY),
             divergingEpoch = None,
             highWatermark = offsetSnapshot.highWatermark.messageOffset,
@@ -1186,6 +1213,7 @@ class ReplicaManager(val config: KafkaConfig,
             exception = None)
         } else {
           // Try the read first, this tells us whether we need all of adjustedFetchSize for this partition
+          // 没有偏好，从第一个读取
           val readInfo: LogReadInfo = partition.readRecords(
             lastFetchedEpoch = fetchInfo.lastFetchedEpoch,
             fetchOffset = fetchInfo.fetchOffset,
