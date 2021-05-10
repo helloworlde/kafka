@@ -486,10 +486,14 @@ class GroupMetadataManager(brokerId: Int,
   /**
    * The most important guarantee that this API provides is that it should never return a stale offset. i.e., it either
    * returns the current offset or it begins to sync the cache from the log (and returns an error code).
+   *
+   * 返回 offset
+   * 这个 API 的重要保证是不会返回旧的 offset，即，要么返回当前的偏移，要么返回开始同步的日志的偏移
    */
   def getOffsets(groupId: String, requireStable: Boolean, topicPartitionsOpt: Option[Seq[TopicPartition]]): Map[TopicPartition, PartitionData] = {
     trace("Getting offsets of %s for group %s.".format(topicPartitionsOpt.getOrElse("all partitions"), groupId))
     val group = groupMetadataCache.get(groupId)
+    // group 无效
     if (group == null) {
       topicPartitionsOpt.getOrElse(Seq.empty[TopicPartition]).map { topicPartition =>
         val partitionData = new PartitionData(OffsetFetchResponse.INVALID_OFFSET,
@@ -498,6 +502,7 @@ class GroupMetadataManager(brokerId: Int,
       }.toMap
     } else {
       group.inLock {
+        // group 状态是 dead
         if (group.is(Dead)) {
           topicPartitionsOpt.getOrElse(Seq.empty[TopicPartition]).map { topicPartition =>
             val partitionData = new PartitionData(OffsetFetchResponse.INVALID_OFFSET,
@@ -508,15 +513,19 @@ class GroupMetadataManager(brokerId: Int,
           val topicPartitions = topicPartitionsOpt.getOrElse(group.allOffsets.keySet)
 
           topicPartitions.map { topicPartition =>
+            // 要求 Stable 且有未提交的 offset，则返回错误
             if (requireStable && group.hasPendingOffsetCommitsForTopicPartition(topicPartition)) {
               topicPartition -> new PartitionData(OffsetFetchResponse.INVALID_OFFSET,
                 Optional.empty(), "", Errors.UNSTABLE_OFFSET_COMMIT)
             } else {
+              // 获取 offset
               val partitionData = group.offset(topicPartition) match {
+                // 没有则返回无效的 offset
                 case None =>
                   new PartitionData(OffsetFetchResponse.INVALID_OFFSET,
                     Optional.empty(), "", Errors.NONE)
                 case Some(offsetAndMetadata) =>
+                  // 有，则返回相应的 offset 信息
                   new PartitionData(offsetAndMetadata.offset,
                     offsetAndMetadata.leaderEpoch, offsetAndMetadata.metadata, Errors.NONE)
               }

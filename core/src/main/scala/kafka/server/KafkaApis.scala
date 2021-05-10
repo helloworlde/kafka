@@ -146,6 +146,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.UPDATE_METADATA => handleUpdateMetadataRequest(request)
         case ApiKeys.CONTROLLED_SHUTDOWN => handleControlledShutdownRequest(request)
         case ApiKeys.OFFSET_COMMIT => handleOffsetCommitRequest(request)
+        // 拉取 Topic 指定 Partition 的 offset
         case ApiKeys.OFFSET_FETCH => handleOffsetFetchRequest(request)
         case ApiKeys.FIND_COORDINATOR => handleFindCoordinatorRequest(request)
         case ApiKeys.JOIN_GROUP => handleJoinGroupRequest(request)
@@ -1303,20 +1304,25 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   /**
    * Handle an offset fetch request
+   * 拉取 Topic 指定 Partition 的 offset
    */
   def handleOffsetFetchRequest(request: RequestChannel.Request): Unit = {
     val header = request.header
     val offsetFetchRequest = request.body[OffsetFetchRequest]
-
+    // 检查授权
     def partitionByAuthorized(seq: Seq[TopicPartition]): (Seq[TopicPartition], Seq[TopicPartition]) =
       partitionSeqByAuthorized(request.context, DESCRIBE, TOPIC, seq)(_.topic)
 
+    // 响应
     def createResponse(requestThrottleMs: Int): AbstractResponse = {
-      val offsetFetchResponse =
+      // 获取 offset 的响应
+      val offsetFetchResponse = {
         // reject the request if not authorized to the group
+        // 授权失败
         if (!authorize(request.context, DESCRIBE, GROUP, offsetFetchRequest.groupId))
           offsetFetchRequest.getErrorResponse(requestThrottleMs, Errors.GROUP_AUTHORIZATION_FAILED)
         else {
+          // apiVersion 是 0 (旧版本的 api)
           if (header.apiVersion == 0) {
             val (authorizedPartitions, unauthorizedPartitions) = partitionByAuthorized(
               offsetFetchRequest.partitions.asScala)
@@ -1347,19 +1353,25 @@ class KafkaApis(val requestChannel: RequestChannel,
             new OffsetFetchResponse(requestThrottleMs, Errors.NONE, (authorizedPartitionData ++ unauthorizedPartitionData).asJava)
           } else {
             // versions 1 and above read offsets from Kafka
+            // 1 或之后的版本从 ongoing Kafka 读取 offset
+            // 拉取所有的 Partition
             if (offsetFetchRequest.isAllPartitions) {
+              // 处理拉取
               val (error, allPartitionData) = groupCoordinator.handleFetchOffsets(offsetFetchRequest.groupId, offsetFetchRequest.requireStable)
               if (error != Errors.NONE)
                 offsetFetchRequest.getErrorResponse(requestThrottleMs, error)
               else {
                 // clients are not allowed to see offsets for topics that are not authorized for Describe
+                // 检查授权
                 val (authorizedPartitionData, _) = partitionMapByAuthorized(request.context,
                   DESCRIBE, TOPIC, allPartitionData)(_.topic)
                 new OffsetFetchResponse(requestThrottleMs, Errors.NONE, authorizedPartitionData.asJava)
               }
             } else {
+              // 检查授权
               val (authorizedPartitions, unauthorizedPartitions) = partitionByAuthorized(
                 offsetFetchRequest.partitions.asScala)
+              // 获取 offset
               val (error, authorizedPartitionData) = groupCoordinator.handleFetchOffsets(offsetFetchRequest.groupId,
                 offsetFetchRequest.requireStable, Some(authorizedPartitions))
               if (error != Errors.NONE)
@@ -1371,6 +1383,7 @@ class KafkaApis(val requestChannel: RequestChannel,
             }
           }
         }
+      }
 
       trace(s"Sending offset fetch response $offsetFetchResponse for correlation id ${header.correlationId} to client ${header.clientId}.")
       offsetFetchResponse

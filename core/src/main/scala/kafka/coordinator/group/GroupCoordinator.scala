@@ -792,14 +792,23 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  /**
+   * 获取 offset
+   * @param groupId
+   * @param requireStable
+   * @param partitions
+   * @return
+   */
   def handleFetchOffsets(groupId: String, requireStable: Boolean, partitions: Option[Seq[TopicPartition]] = None):
   (Errors, Map[TopicPartition, OffsetFetchResponse.PartitionData]) = {
 
+    // 检查 group
     validateGroupStatus(groupId, ApiKeys.OFFSET_FETCH) match {
       case Some(error) => error -> Map.empty
       case None =>
         // return offsets blindly regardless the current group state since the group may be using
         // Kafka commit storage without automatic group management
+        // 返回偏移
         (Errors.NONE, groupManager.getOffsets(groupId, requireStable, partitions))
     }
   }
@@ -853,6 +862,7 @@ class GroupCoordinator(val brokerId: Int,
 
   /**
    * Check that the groupId is valid, assigned to this coordinator and that the group has been loaded.
+   * 检查 groupId 是否有效，分配给这个协调器和这个 Group
    */
   private def validateGroupStatus(groupId: String, api: ApiKeys): Option[Errors] = {
     if (!isValidGroupId(groupId, api))
