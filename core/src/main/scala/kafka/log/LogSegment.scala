@@ -268,21 +268,27 @@ class LogSegment private[log] (val log: FileRecords,
   }
 
   /**
-   * TODO Here
    * Find the physical file position for the first message with offset >= the requested offset.
+   * 查找 offset 大于等于要求的 offset 的第一个消息的物理位置
    *
    * The startingFilePosition argument is an optimization that can be used if we already know a valid starting position
    * in the file higher than the greatest-lower-bound from the index.
+   * 如果已知有效的开始位置大于给定的最小位置，则 startingFilePosition 是一个可选的参数
    *
-   * @param offset The offset we want to translate
+   * @param offset               The offset we want to translate
+   *                             想要转换的 offset
    * @param startingFilePosition A lower bound on the file position from which to begin the search. This is purely an optimization and
-   * when omitted, the search will begin at the position in the offset index.
+   *                             when omitted, the search will begin at the position in the offset index.
+   *                             开始查找的最低位置
    * @return The position in the log storing the message with the least offset >= the requested offset and the size of the
-    *        message or null if no message meets this criteria.
+   *         message or null if no message meets this criteria.
+   *         offset 大于等于要求的 offset 消息在日志中的位置，如果没有消息则是 null
    */
   @threadsafe
   private[log] def translateOffset(offset: Long, startingFilePosition: Int = 0): LogOffsetPosition = {
+    // 从索引中查找
     val mapping = offsetIndex.lookup(offset)
+    // 从日志中查找
     log.searchForOffsetWithSize(offset, max(mapping.position, startingFilePosition))
   }
 
@@ -314,7 +320,7 @@ class LogSegment private[log] (val log: FileRecords,
     if (maxSize < 0)
       throw new IllegalArgumentException(s"Invalid max size $maxSize for log read from segment $log")
 
-    // 转换 offset
+    // 转换 offset 为 position
     val startOffsetAndSize = translateOffset(startOffset)
 
     // if the start position is already off the end of the log, return null
