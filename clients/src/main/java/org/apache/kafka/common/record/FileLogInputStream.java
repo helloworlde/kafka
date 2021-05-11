@@ -37,6 +37,8 @@ import static org.apache.kafka.common.record.Records.SIZE_OFFSET;
 
 /**
  * A log input stream which is backed by a {@link FileChannel}.
+ *
+ * 基于 FileChannel 的日志输入流
  */
 public class FileLogInputStream implements LogInputStream<FileLogInputStream.FileChannelRecordBatch> {
     private int position;
@@ -58,13 +60,20 @@ public class FileLogInputStream implements LogInputStream<FileLogInputStream.Fil
         this.end = end;
     }
 
+    /**
+     * 获取下一个批次
+     * @return
+     * @throws IOException
+     */
     @Override
     public FileChannelRecordBatch nextBatch() throws IOException {
+        // NIO channel
         FileChannel channel = fileRecords.channel();
         if (position >= end - HEADER_SIZE_UP_TO_MAGIC)
             return null;
 
         logHeaderBuffer.rewind();
+        // 读取
         Utils.readFullyOrFail(channel, logHeaderBuffer, position, "log header");
 
         logHeaderBuffer.rewind();
@@ -82,6 +91,7 @@ public class FileLogInputStream implements LogInputStream<FileLogInputStream.Fil
         byte magic = logHeaderBuffer.get(MAGIC_OFFSET);
         final FileChannelRecordBatch batch;
 
+        // 构建对象
         if (magic < RecordBatch.MAGIC_VALUE_V2)
             batch = new LegacyFileChannelRecordBatch(offset, magic, fileRecords, position, size);
         else

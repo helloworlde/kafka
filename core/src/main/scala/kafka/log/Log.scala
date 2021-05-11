@@ -1628,7 +1628,6 @@ class Log(@volatile private var _dir: File,
         }
 
         // 从段上读取数据
-        // TODO Here
         val fetchInfo = segment.read(startOffset, maxLength, maxPosition, minOneMessage)
         if (fetchInfo == null) {
           segmentEntry = segments.higherEntry(segmentEntry.getKey)

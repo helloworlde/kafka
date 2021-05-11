@@ -55,6 +55,7 @@ public class FileRecords extends AbstractRecords implements Closeable {
     /**
      * The {@code FileRecords.open} methods should be used instead of this constructor whenever possible.
      * The constructor is visible for tests.
+     * 读取日志文件内容
      */
     FileRecords(File file,
                 FileChannel channel,
@@ -68,10 +69,12 @@ public class FileRecords extends AbstractRecords implements Closeable {
         this.isSlice = isSlice;
         this.size = new AtomicInteger();
 
+        // 如果是分割读取，则读取长度为结束减去开始位置
         if (isSlice) {
             // don't check the file size if this is just a slice view
             size.set(end - start);
         } else {
+            // 段长度超出
             if (channel.size() > Integer.MAX_VALUE)
                 throw new KafkaException("The size of segment " + file + " (" + channel.size() +
                         ") is larger than the maximum allowed segment size of " + Integer.MAX_VALUE);
@@ -81,9 +84,10 @@ public class FileRecords extends AbstractRecords implements Closeable {
 
             // if this is not a slice, update the file pointer to the end of the file
             // set the file position to the last byte in the file
+            // 如果不是分片，更新文件的指针到文件末尾
             channel.position(limit);
         }
-
+        // 批量读取
         batches = batchesFrom(start);
     }
 
@@ -125,17 +129,24 @@ public class FileRecords extends AbstractRecords implements Closeable {
     /**
      * Return a slice of records from this instance, which is a view into this set starting from the given position
      * and with the given size limit.
-     *
+     * 返回当前实例的日志切片，包含从指定开始位置长度为 size 的数据
+     * <p>
      * If the size is beyond the end of the file, the end will be based on the size of the file at the time of the read.
-     *
+     * 如果 size 超过文件的大小，读取时将基于文件的大小
+     * <p>
      * If this message set is already sliced, the position will be taken relative to that slicing.
+     * 如果消息集合已经分割，position 将会被重置到相应的分割位置
      *
      * @param position The start position to begin the read from
-     * @param size The number of bytes after the start position to include
+     *                 开始读取的位置
+     * @param size     The number of bytes after the start position to include
+     *                 position 位置之后要包含的字节数量
      * @return A sliced wrapper on this message set limited based on the given position and size
+     * 给定 position 开始大小为 size 的封装的消息集合
      */
     public FileRecords slice(int position, int size) throws IOException {
         // Cache current size in case concurrent write changes it
+        // 缓存当前的位置，避免并发写入改变这个值
         int currentSizeInBytes = sizeInBytes();
 
         if (position < 0)
@@ -145,10 +156,13 @@ public class FileRecords extends AbstractRecords implements Closeable {
         if (size < 0)
             throw new IllegalArgumentException("Invalid size: " + size + " in read from " + this);
 
+        // 结束位置
         int end = this.start + position + size;
         // handle integer overflow or if end is beyond the end of the file
+        // 如果 integer 溢出或者超过当前文件大小，则 end 为可以读取的大小
         if (end < 0 || end > start + currentSizeInBytes)
             end = start + currentSizeInBytes;
+        // 返回数据
         return new FileRecords(file, channel, this.start + position, end, true);
     }
 
@@ -386,8 +400,14 @@ public class FileRecords extends AbstractRecords implements Closeable {
      * Get an iterator over the record batches in the file, starting at a specific position. This is similar to
      * {@link #batches()} except that callers specify a particular position to start reading the batches from. This
      * method must be used with caution: the start position passed in must be a known start of a batch.
+     * <p>
+     * 获取文件的迭代器，开始于指定的位置，和 batches 相似，期望调用者从指定位置读取，但是这个方法需要谨慎使用：
+     * 传入的开始位置必须是 batch 中已知的
+     *
      * @param start The position to start record iteration from; must be a known position for start of a batch
+     *              记录开始迭代获取的位置，必须是 batch 中已知的
      * @return An iterator over batches starting from {@code start}
+     * 开始于 start 的迭代器
      */
     public Iterable<FileChannelRecordBatch> batchesFrom(final int start) {
         return () -> batchIterator(start);
@@ -404,6 +424,7 @@ public class FileRecords extends AbstractRecords implements Closeable {
             end = this.end;
         else
             end = this.sizeInBytes();
+        // 文件流
         FileLogInputStream inputStream = new FileLogInputStream(this, start, end);
         return new RecordBatchIterator<>(inputStream);
     }

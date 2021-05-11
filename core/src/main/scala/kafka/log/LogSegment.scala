@@ -268,6 +268,7 @@ class LogSegment private[log] (val log: FileRecords,
   }
 
   /**
+   * TODO Here
    * Find the physical file position for the first message with offset >= the requested offset.
    *
    * The startingFilePosition argument is an optimization that can be used if we already know a valid starting position
@@ -289,13 +290,21 @@ class LogSegment private[log] (val log: FileRecords,
    * Read a message set from this segment beginning with the first offset >= startOffset. The message set will include
    * no more than maxSize bytes and will end before maxOffset if a maxOffset is specified.
    *
-   * @param startOffset A lower bound on the first offset to include in the message set we read
-   * @param maxSize The maximum number of bytes to include in the message set we read
-   * @param maxPosition The maximum position in the log segment that should be exposed for read
-   * @param minOneMessage If this is true, the first message will be returned even if it exceeds `maxSize` (if one exists)
+   * 从指定的 Segment 日志中读取 offset 大于等于 startOffset 的消息集合，消息集合包含不超过 maxSize 个字节，如果
+   * 指定了 maxOffset，则读取 maxOffset 之前的消息
    *
+   * @param startOffset   A lower bound on the first offset to include in the message set we read
+   *                      包含要读取的第一条消息的最小 offset
+   * @param maxSize       The maximum number of bytes to include in the message set we read
+   *                      读取的消息集合的最大字节数
+   * @param maxPosition   The maximum position in the log segment that should be exposed for read
+   *                      在这个段上读取的最大的位置
+   * @param minOneMessage If this is true, the first message will be returned even if it exceeds `maxSize` (if one exists)
+   *                      如果是 true，及时已经达到 maxSize，也会返回第一条消息
    * @return The fetched data and the offset metadata of the first message whose offset is >= startOffset,
    *         or null if the startOffset is larger than the largest offset in this log
+   *         第一条消息的 offset 大于等于 startOffset 的包含拉取到的数据和 offset 元数据，如果 startOffset 大于
+   *         日志中最大的 offset，则返回 null
    */
   @threadsafe
   def read(startOffset: Long,
@@ -305,26 +314,33 @@ class LogSegment private[log] (val log: FileRecords,
     if (maxSize < 0)
       throw new IllegalArgumentException(s"Invalid max size $maxSize for log read from segment $log")
 
+    // 转换 offset
     val startOffsetAndSize = translateOffset(startOffset)
 
     // if the start position is already off the end of the log, return null
+    // 如果开始的 offset 已经是这个日志的结尾，返回 null
     if (startOffsetAndSize == null)
       return null
 
+    // offset 元数据
     val startPosition = startOffsetAndSize.position
     val offsetMetadata = LogOffsetMetadata(startOffset, this.baseOffset, startPosition)
 
+    // 调整之后的最大长度
     val adjustedMaxSize =
       if (minOneMessage) math.max(maxSize, startOffsetAndSize.size)
       else maxSize
 
     // return a log segment but with zero size in the case below
+    // 返回空的数据
     if (adjustedMaxSize == 0)
       return FetchDataInfo(offsetMetadata, MemoryRecords.EMPTY)
 
     // calculate the length of the message set to read based on whether or not they gave us a maxOffset
+    // 计算要读取的日志长度
     val fetchSize: Int = min((maxPosition - startPosition).toInt, adjustedMaxSize)
 
+    // 获取日志，并返回数据
     FetchDataInfo(offsetMetadata, log.slice(startPosition, fetchSize),
       firstEntryIncomplete = adjustedMaxSize < startOffsetAndSize.size)
   }

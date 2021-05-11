@@ -16,10 +16,6 @@
  */
 package org.apache.kafka.common.utils;
 
-import java.nio.BufferUnderflowException;
-import java.util.EnumSet;
-import java.util.SortedSet;
-import java.util.TreeSet;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.config.ConfigException;
 import org.slf4j.Logger;
@@ -35,6 +31,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -48,10 +45,14 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Date;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -62,6 +63,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.BinaryOperator;
@@ -72,9 +75,6 @@ import java.util.regex.Pattern;
 import java.util.stream.Collector;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 
 public final class Utils {
 
@@ -1033,16 +1033,20 @@ public final class Utils {
     /**
      * Read data from the channel to the given byte buffer until there are no bytes remaining in the buffer. If the end
      * of the file is reached while there are bytes remaining in the buffer, an EOFException is thrown.
+     * 从 Channel 中读取数据，直到 buffer 中没有剩余空闲字节，如果已经到达文件末尾，但是还有空闲字节，则抛出 EOFException
      *
-     * @param channel File channel containing the data to read from
+     * @param channel           File channel containing the data to read from
+     *                          包含要读取的数据的文件 Channel
      * @param destinationBuffer The buffer into which bytes are to be transferred
-     * @param position The file position at which the transfer is to begin; it must be non-negative
-     * @param description A description of what is being read, this will be included in the EOFException if it is thrown
-     *
+     *                          要传输字节数据的缓冲区
+     * @param position          The file position at which the transfer is to begin; it must be non-negative
+     *                          开始读取的文件位置
+     * @param description       A description of what is being read, this will be included in the EOFException if it is thrown
+     *                          描述读取文件，如果抛出 EOFException 将会包含
      * @throws IllegalArgumentException If position is negative
-     * @throws EOFException If the end of the file is reached while there are remaining bytes in the destination buffer
-     * @throws IOException If an I/O error occurs, see {@link FileChannel#read(ByteBuffer, long)} for details on the
-     * possible exceptions
+     * @throws EOFException             If the end of the file is reached while there are remaining bytes in the destination buffer
+     * @throws IOException              If an I/O error occurs, see {@link FileChannel#read(ByteBuffer, long)} for details on the
+     *                                  possible exceptions
      */
     public static void readFullyOrFail(FileChannel channel, ByteBuffer destinationBuffer, long position,
                                        String description) throws IOException {
@@ -1050,6 +1054,7 @@ public final class Utils {
             throw new IllegalArgumentException("The file channel position cannot be negative, but it is " + position);
         }
         int expectedReadBytes = destinationBuffer.remaining();
+        // 读取
         readFully(channel, destinationBuffer, position);
         if (destinationBuffer.hasRemaining()) {
             throw new EOFException(String.format("Failed to read `%s` from file channel `%s`. Expected to read %d bytes, " +
@@ -1077,6 +1082,7 @@ public final class Utils {
         long currentPosition = position;
         int bytesRead;
         do {
+            // 通过 NIO 读取
             bytesRead = channel.read(destinationBuffer, currentPosition);
             currentPosition += bytesRead;
         } while (bytesRead != -1 && destinationBuffer.hasRemaining());
