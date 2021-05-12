@@ -16,13 +16,9 @@
  */
 package kafka.coordinator.group
 
-import java.nio.ByteBuffer
-import java.util.UUID
-import java.util.concurrent.locks.ReentrantLock
-
 import kafka.common.OffsetAndMetadata
-import kafka.utils.{CoreUtils, Logging, nonthreadsafe}
 import kafka.utils.Implicits._
+import kafka.utils.{CoreUtils, Logging, nonthreadsafe}
 import org.apache.kafka.clients.consumer.internals.ConsumerProtocol
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.message.JoinGroupResponseData.JoinGroupResponseMember
@@ -30,6 +26,9 @@ import org.apache.kafka.common.protocol.Errors
 import org.apache.kafka.common.protocol.types.SchemaException
 import org.apache.kafka.common.utils.Time
 
+import java.nio.ByteBuffer
+import java.util.UUID
+import java.util.concurrent.locks.ReentrantLock
 import scala.collection.{Seq, immutable, mutable}
 import scala.jdk.CollectionConverters._
 
@@ -392,10 +391,13 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
   }
 
   /**
-    * Verify the member.id is up to date for static members. Return true if both conditions met:
-    *   1. given member is a known static member to group
-    *   2. group stored member.id doesn't match with given member.id
-    */
+   * Verify the member.id is up to date for static members. Return true if both conditions met:
+   *   1. given member is a known static member to group
+   *   2. group stored member.id doesn't match with given member.id
+   * 验证静态成员的 member.id，如果满足以下两个条件，则返回 true:
+   *   1. member 是已知的 Group 静态成员
+   *   2. Group 存储的 member.id 和所给的不一致
+   */
   def isStaticMemberFenced(memberId: String,
                            groupInstanceId: Option[String],
                            operation: String): Boolean = {
@@ -581,15 +583,18 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
     this.pendingTransactionalOffsetCommits ++= pendingTxnOffsets
   }
 
+  // 消息提交回调，会更新 offsets 缓存，将 Partition 从待提交中移除
   def onOffsetCommitAppend(topicPartition: TopicPartition, offsetWithCommitRecordMetadata: CommitRecordMetadataAndOffset): Unit = {
     if (pendingOffsetCommits.contains(topicPartition)) {
       if (offsetWithCommitRecordMetadata.appendedBatchOffset.isEmpty)
         throw new IllegalStateException("Cannot complete offset commit write without providing the metadata of the record " +
           "in the log.")
+      // 更新 offsets 缓存信息
       if (!offsets.contains(topicPartition) || offsets(topicPartition).olderThan(offsetWithCommitRecordMetadata))
         offsets.put(topicPartition, offsetWithCommitRecordMetadata)
     }
 
+    // 将 Partition 从待提交的集合中移除
     pendingOffsetCommits.get(topicPartition) match {
       case Some(stagedOffset) if offsetWithCommitRecordMetadata.offsetAndMetadata == stagedOffset =>
         pendingOffsetCommits.remove(topicPartition)
@@ -606,6 +611,7 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
     }
   }
 
+  // offset 提交
   def prepareOffsetCommit(offsets: Map[TopicPartition, OffsetAndMetadata]): Unit = {
     receivedConsumerOffsetCommits = true
     pendingOffsetCommits ++= offsets

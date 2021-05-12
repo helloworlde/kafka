@@ -684,27 +684,37 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  /**
+   * 处理消息提交
+   */
   def handleCommitOffsets(groupId: String,
                           memberId: String,
                           groupInstanceId: Option[String],
                           generationId: Int,
                           offsetMetadata: immutable.Map[TopicPartition, OffsetAndMetadata],
                           responseCallback: immutable.Map[TopicPartition, Errors] => Unit): Unit = {
+    // 检查 Group 状态
     validateGroupStatus(groupId, ApiKeys.OFFSET_COMMIT) match {
+      // 错误处理
       case Some(error) => responseCallback(offsetMetadata.map { case (k, _) => k -> error })
       case None =>
+        // 获取 Group
         groupManager.getGroup(groupId) match {
           case None =>
             if (generationId < 0) {
               // the group is not relying on Kafka for group management, so allow the commit
+              // 这个 Group 不依赖于 group 管理，提交
               val group = groupManager.addGroup(new GroupMetadata(groupId, Empty, time))
+              // 提交
               doCommitOffsets(group, memberId, groupInstanceId, generationId, offsetMetadata, responseCallback)
             } else {
               // or this is a request coming from an older generation. either way, reject the commit
+              // 这个请求来自之前的代，返回错误
               responseCallback(offsetMetadata.map { case (k, _) => k -> Errors.ILLEGAL_GENERATION })
             }
 
           case Some(group) =>
+            // 提交
             doCommitOffsets(group, memberId, groupInstanceId, generationId, offsetMetadata, responseCallback)
         }
     }
@@ -747,6 +757,9 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  /**
+   * 提交 offset
+   */
   private def doCommitOffsets(group: GroupMetadata,
                               memberId: String,
                               groupInstanceId: Option[String],
@@ -754,6 +767,7 @@ class GroupCoordinator(val brokerId: Int,
                               offsetMetadata: immutable.Map[TopicPartition, OffsetAndMetadata],
                               responseCallback: immutable.Map[TopicPartition, Errors] => Unit): Unit = {
     group.inLock {
+      // 如果 group  状态是 dead，则返回错误
       if (group.is(Dead)) {
         // if the group is marked as dead, it means some other thread has just removed the group
         // from the coordinator metadata; it is likely that the group has migrated to some other
@@ -761,21 +775,29 @@ class GroupCoordinator(val brokerId: Int,
         // finding the correct coordinator and rejoin.
         responseCallback(offsetMetadata.map { case (k, _) => k -> Errors.COORDINATOR_NOT_AVAILABLE })
       } else if (group.isStaticMemberFenced(memberId, groupInstanceId, "commit-offsets")) {
+        // 静态成员 member.id 不匹配
         responseCallback(offsetMetadata.map { case (k, _) => k -> Errors.FENCED_INSTANCE_ID })
       } else if (generationId < 0 && group.is(Empty)) {
         // The group is only using Kafka to store offsets.
+        // generation 小于 0 且 group 是空的，仅用于 Kafka 存储 offset
         groupManager.storeOffsets(group, memberId, offsetMetadata, responseCallback)
       } else if (!group.has(memberId)) {
+        // member.id 未知
         responseCallback(offsetMetadata.map { case (k, _) => k -> Errors.UNKNOWN_MEMBER_ID })
       } else if (generationId != group.generationId) {
+        // generation 不匹配
         responseCallback(offsetMetadata.map { case (k, _) => k -> Errors.ILLEGAL_GENERATION })
       } else {
         group.currentState match {
           case Stable | PreparingRebalance =>
+            // 正常状态或者准备 rebalance
             // During PreparingRebalance phase, we still allow a commit request since we rely
             // on heartbeat response to eventually notify the rebalance in progress signal to the consumer
+            // 获取 member
             val member = group.get(memberId)
+            // 完成已经存在的延迟心跳，并计划下一个心跳
             completeAndScheduleNextHeartbeatExpiration(group, member)
+            // 保存 offset
             groupManager.storeOffsets(group, memberId, offsetMetadata, responseCallback)
 
           case CompletingRebalance =>
@@ -783,6 +805,7 @@ class GroupCoordinator(val brokerId: Int,
             // but since the consumer's member.id and generation is valid, it means it has received
             // the latest group generation information from the JoinResponse.
             // So let's return a REBALANCE_IN_PROGRESS to let consumer handle it gracefully.
+            // 正在 rebalance，返回失败
             responseCallback(offsetMetadata.map { case (k, _) => k -> Errors.REBALANCE_IN_PROGRESS })
 
           case _ =>
@@ -965,6 +988,7 @@ class GroupCoordinator(val brokerId: Int,
 
   /**
    * Complete existing DelayedHeartbeats for the given member and schedule the next one
+   * 完成已经存在的延迟心跳，并计划下一个心跳
    */
   private def completeAndScheduleNextHeartbeatExpiration(group: GroupMetadata, member: MemberMetadata): Unit = {
     completeAndScheduleNextExpiration(group, member, member.sessionTimeoutMs)

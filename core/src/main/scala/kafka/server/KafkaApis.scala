@@ -147,6 +147,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.STOP_REPLICA => handleStopReplicaRequest(request)
         case ApiKeys.UPDATE_METADATA => handleUpdateMetadataRequest(request)
         case ApiKeys.CONTROLLED_SHUTDOWN => handleControlledShutdownRequest(request)
+        // 提交 Commit
         case ApiKeys.OFFSET_COMMIT => handleOffsetCommitRequest(request)
         // 拉取 Topic 指定 Partition 的 offset
         case ApiKeys.OFFSET_FETCH => handleOffsetFetchRequest(request)
@@ -383,6 +384,7 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   /**
    * Handle an offset commit request
+   * 处理提交 offset 的请求
    */
   def handleOffsetCommitRequest(request: RequestChannel.Request): Unit = {
     val header = request.header
@@ -391,6 +393,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     val unauthorizedTopicErrors = mutable.Map[TopicPartition, Errors]()
     val nonExistingTopicErrors = mutable.Map[TopicPartition, Errors]()
     // the callback for sending an offset commit response
+    // 响应回调
     def sendResponseCallback(commitStatus: Map[TopicPartition, Errors]): Unit = {
       val combinedCommitStatus = commitStatus ++ unauthorizedTopicErrors ++ nonExistingTopicErrors
       if (isDebugEnabled)
@@ -405,6 +408,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
 
     // reject the request if not authorized to the group
+    // 授权失败
     if (!authorize(request.context, READ, GROUP, offsetCommitRequest.data.groupId)) {
       val error = Errors.GROUP_AUTHORIZATION_FAILED
       val responseTopicList = OffsetCommitRequest.getErrorResponseTopics(
@@ -417,6 +421,7 @@ class KafkaApis(val requestChannel: RequestChannel,
             .setThrottleTimeMs(requestThrottleMs)
       ))
     } else if (offsetCommitRequest.data.groupInstanceId != null && config.interBrokerProtocolVersion < KAFKA_2_3_IV0) {
+      // 不支持 Kafka 2.3 版本
       // Only enable static membership when IBP >= 2.3, because it is not safe for the broker to use the static member logic
       // until we are sure that all brokers support it. If static group being loaded by an older coordinator, it will discard
       // the group.instance.id field, so static members could accidentally become "dynamic", which leads to wrong states.
@@ -433,6 +438,7 @@ class KafkaApis(val requestChannel: RequestChannel,
 
       val topics = offsetCommitRequest.data.topics.asScala
       val authorizedTopics = filterByAuthorized(request.context, READ, TOPIC, topics)(_.name)
+      // 遍历 Topic 和 Partition 检查授权
       for (topicData <- topics) {
         for (partitionData <- topicData.partitions.asScala) {
           val topicPartition = new TopicPartition(topicData.name, partitionData.partitionIndex)
@@ -451,6 +457,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         sendResponseCallback(Map.empty)
       else if (header.apiVersion == 0) {
         // for version 0 always store offsets to ZK
+        // apiVersion 是 0 则将 offset 存储到 zk
         val responseInfo = authorizedTopicRequestInfo.map {
           case (topicPartition, partitionData) =>
             try {
@@ -458,6 +465,7 @@ class KafkaApis(val requestChannel: RequestChannel,
                 && partitionData.committedMetadata().length > config.offsetMetadataMaxSize)
                 (topicPartition, Errors.OFFSET_METADATA_TOO_LARGE)
               else {
+                // 将 offset 存储到 zk
                 zkClient.setOrCreateConsumerOffset(
                   offsetCommitRequest.data.groupId,
                   topicPartition,
@@ -478,18 +486,28 @@ class KafkaApis(val requestChannel: RequestChannel,
         //   - If v1 and explicit retention time is provided we calculate expiration timestamp based on that
         //   - If v2/v3/v4 (no explicit commit timestamp) we treat it the same as v5.
         //   - For v5 and beyond there is no per partition expiration timestamp, so this field is no longer in effect
+        // version 1 及之后的版本将 offset 存储到 offset 管理器中
+        // 默认的表达式是 当前时间戳 + retention
+        // v1 和 v2 的时间戳的表达式不同
+        // - 如果 v1 没有提供明确的时间戳，则认为是 v5
+        // - 如果 v1 提供了保留时间，则基于这个时间
+        // - 如果 v2/v3/v4 没有 提供提交时间，则认为是 v5
+        // - v5 及更高的版本没有每个 Partition 的到期时间，这个属性无效
         val currentTimestamp = time.milliseconds
         val partitionData = authorizedTopicRequestInfo.map { case (k, partitionData) =>
+          // 元数据
           val metadata = if (partitionData.committedMetadata == null)
             OffsetAndMetadata.NoMetadata
           else
             partitionData.committedMetadata
 
+          // leader epoch
           val leaderEpochOpt = if (partitionData.committedLeaderEpoch == RecordBatch.NO_PARTITION_LEADER_EPOCH)
             Optional.empty[Integer]
           else
             Optional.of[Integer](partitionData.committedLeaderEpoch)
 
+          // offset 元数据
           k -> new OffsetAndMetadata(
             offset = partitionData.committedOffset,
             leaderEpoch = leaderEpochOpt,
@@ -506,6 +524,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         }
 
         // call coordinator to handle commit offset
+        // 调用协调器的方法提交
         groupCoordinator.handleCommitOffsets(
           offsetCommitRequest.data.groupId,
           offsetCommitRequest.data.memberId,

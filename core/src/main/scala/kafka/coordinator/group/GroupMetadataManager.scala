@@ -321,6 +321,7 @@ class GroupMetadataManager(brokerId: Int,
     }
   }
 
+  // 追加消息
   private def appendForGroup(group: GroupMetadata,
                              records: Map[TopicPartition, MemoryRecords],
                              callback: Map[TopicPartition, PartitionResponse] => Unit): Unit = {
@@ -337,6 +338,7 @@ class GroupMetadataManager(brokerId: Int,
 
   /**
    * Store offsets by appending it to the replicated log and then inserting to cache
+   * 通过追加副本日志，保存 offset
    */
   def storeOffsets(group: GroupMetadata,
                    consumerId: String,
@@ -345,81 +347,109 @@ class GroupMetadataManager(brokerId: Int,
                    producerId: Long = RecordBatch.NO_PRODUCER_ID,
                    producerEpoch: Short = RecordBatch.NO_PRODUCER_EPOCH): Unit = {
     // first filter out partitions with offset metadata size exceeding limit
+    // 检查 Metadata 的长度
     val filteredOffsetMetadata = offsetMetadata.filter { case (_, offsetAndMetadata) =>
       validateOffsetMetadataLength(offsetAndMetadata.metadata)
     }
 
     group.inLock {
+      // 接收到 consumer 或者事务的提交
       if (!group.hasReceivedConsistentOffsetCommits)
         warn(s"group: ${group.groupId} with leader: ${group.leaderOrNull} has received offset commits from consumers as well " +
           s"as transactional producers. Mixing both types of offset commits will generally result in surprises and " +
           s"should be avoided.")
     }
 
+    // 事务提交
     val isTxnOffsetCommit = producerId != RecordBatch.NO_PRODUCER_ID
     // construct the message set to append
     if (filteredOffsetMetadata.isEmpty) {
       // compute the final error codes for the commit response
+      // metadata 太大
       val commitStatus = offsetMetadata.map { case (k, _) => k -> Errors.OFFSET_METADATA_TOO_LARGE }
       responseCallback(commitStatus)
       None
     } else {
       getMagic(partitionFor(group.groupId)) match {
         case Some(magicValue) =>
+          // 有 magicValue
           // We always use CREATE_TIME, like the producer. The conversion to LOG_APPEND_TIME (if necessary) happens automatically.
+          // 使用 CREATE_TIME 作为提交时间
           val timestampType = TimestampType.CREATE_TIME
           val timestamp = time.milliseconds()
 
+          // 生成新的 __consumer_offsets 消息
+          // key 是 group，topic，Partition 信息的组合
+          // value 就是提交的 offset 信息的组合
           val records = filteredOffsetMetadata.map { case (topicPartition, offsetAndMetadata) =>
             val key = GroupMetadataManager.offsetCommitKey(group.groupId, topicPartition)
             val value = GroupMetadataManager.offsetCommitValue(offsetAndMetadata, interBrokerProtocolVersion)
             new SimpleRecord(timestamp, key, value)
           }
+          // __consumer_offsets 的 Partition，由 group 的 hash 决定
           val offsetTopicPartition = new TopicPartition(Topic.GROUP_METADATA_TOPIC_NAME, partitionFor(group.groupId))
           val buffer = ByteBuffer.allocate(AbstractRecords.estimateSizeInBytes(magicValue, compressionType, records.asJava))
 
+          // 事务消息的 magicValue 无效
           if (isTxnOffsetCommit && magicValue < RecordBatch.MAGIC_VALUE_V2)
             throw Errors.UNSUPPORTED_FOR_MESSAGE_FORMAT.exception("Attempting to make a transaction offset commit with an invalid magic: " + magicValue)
 
+          // 创建 MemoryRecords 批次
           val builder = MemoryRecords.builder(buffer, magicValue, compressionType, timestampType, 0L, time.milliseconds(),
             producerId, producerEpoch, 0, isTxnOffsetCommit, RecordBatch.NO_PARTITION_LEADER_EPOCH)
 
+          // 追加批次
           records.foreach(builder.append)
           val entries = Map(offsetTopicPartition -> builder.build())
 
           // set the callback function to insert offsets into cache after log append completed
+          // 当日志追加完成后，执行回调将 offset 信息插入到缓存中
           def putCacheCallback(responseStatus: Map[TopicPartition, PartitionResponse]): Unit = {
             // the append response should only contain the topics partition
+            // 响应格式错误
             if (responseStatus.size != 1 || !responseStatus.contains(offsetTopicPartition))
               throw new IllegalStateException("Append status %s should only have one partition %s"
                 .format(responseStatus, offsetTopicPartition))
 
             // record the number of offsets committed to the log
+            // 统计
             offsetCommitsSensor.record(records.size)
 
             // construct the commit response status and insert
             // the offset and metadata to cache if the append status has no error
+            // 状态
             val status = responseStatus(offsetTopicPartition)
 
             val responseError = group.inLock {
+              // 没有错误
               if (status.error == Errors.NONE) {
+                // group 的状态不是 dead，触发提交的回调
                 if (!group.is(Dead)) {
                   filteredOffsetMetadata.forKeyValue { (topicPartition, offsetAndMetadata) =>
+                    // 提交事务
                     if (isTxnOffsetCommit)
                       group.onTxnOffsetCommitAppend(producerId, topicPartition, CommitRecordMetadataAndOffset(Some(status.baseOffset), offsetAndMetadata))
-                    else
+                    else {
+                      // 消息提交回调，会更新 offsets 缓存，将 Partition 从待提交中移除
                       group.onOffsetCommitAppend(topicPartition, CommitRecordMetadataAndOffset(Some(status.baseOffset), offsetAndMetadata))
+                    }
                   }
                 }
                 Errors.NONE
               } else {
+                // 有错误，group 的状态不是 dead
                 if (!group.is(Dead)) {
-                  if (!group.hasPendingOffsetCommitsFromProducer(producerId))
+                  if (!group.hasPendingOffsetCommitsFromProducer(producerId)) {
+                    // 移除生产者组
                     removeProducerGroup(producerId, group.groupId)
+                  }
+
+                  // 提交失败回调
                   filteredOffsetMetadata.forKeyValue { (topicPartition, offsetAndMetadata) =>
                     if (isTxnOffsetCommit)
                       group.failPendingTxnOffsetCommit(producerId, topicPartition)
                     else
+                      // 将 Partition 从待提交中移除
                       group.failPendingOffsetWrite(topicPartition, offsetAndMetadata)
                   }
                 }
@@ -457,20 +487,25 @@ class GroupMetadataManager(brokerId: Int,
             }
 
             // finally trigger the callback logic passed from the API layer
+            // 响应回调
             responseCallback(commitStatus)
           }
 
+          // 事务提交
           if (isTxnOffsetCommit) {
             group.inLock {
+              // 追加到事务中
               addProducerGroup(producerId, group.groupId)
               group.prepareTxnOffsetCommit(producerId, offsetMetadata)
             }
           } else {
             group.inLock {
+              // 修改状态，将要提交的信息添加到集合中
               group.prepareOffsetCommit(offsetMetadata)
             }
           }
 
+          // 追加消息
           appendForGroup(group, entries, putCacheCallback)
 
         case None =>

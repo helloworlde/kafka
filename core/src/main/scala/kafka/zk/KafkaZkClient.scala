@@ -1473,13 +1473,18 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
 
   /**
    * Set the committed offset for a topic partition and group
+   * 从 zk 设置或拉取 Group 的 Partition offset 信息
+   *
    * @param group the group whose offset is being set
    * @param topicPartition the topic partition whose offset is being set
    * @param offset the offset value
    */
   def setOrCreateConsumerOffset(group: String, topicPartition: TopicPartition, offset: Long): Unit = {
+    // 路径是 /consumers/${group}/offsets/${topic}/${partition}
+    // 设置 offset
     val setDataResponse = setConsumerOffset(group, topicPartition, offset)
     if (setDataResponse.resultCode == Code.NONODE) {
+      // 创建 Consumer 的 offset
       createConsumerOffset(group, topicPartition, offset)
     } else {
       setDataResponse.maybeThrow()
