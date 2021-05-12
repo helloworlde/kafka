@@ -332,12 +332,18 @@ public class FileRecords extends AbstractRecords implements Closeable {
      * - Message's position in the log file is greater than or equals to the startingPosition.
      * - Message's offset is greater than or equals to the startingOffset.
      *
+     * 查找第一个满足以下条件的消息
+     * - 时间戳大于等于 targetTimestamp
+     * - position 大于等于 startingPosition
+     * - offset 大于等于 startingOffset
+     *
      * @param targetTimestamp The timestamp to search for.
      * @param startingPosition The starting position to search.
      * @param startingOffset The starting offset to search.
      * @return The timestamp and offset of the message found. Null if no message is found.
      */
     public TimestampAndOffset searchForTimestamp(long targetTimestamp, int startingPosition, long startingOffset) {
+        // 遍历 batch，比较条件，查找满足的消息
         for (RecordBatch batch : batchesFrom(startingPosition)) {
             if (batch.maxTimestamp() >= targetTimestamp) {
                 // We found a message
@@ -421,6 +427,11 @@ public class FileRecords extends AbstractRecords implements Closeable {
         return batchIterator(start);
     }
 
+    /**
+     * 指定文件中的位置，创建迭代器
+     * @param start
+     * @return
+     */
     private AbstractIterator<FileChannelRecordBatch> batchIterator(int start) {
         final int end;
         if (isSlice)

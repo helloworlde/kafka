@@ -478,7 +478,7 @@ class Partition(val topicPartition: TopicPartition,
   def isLeader: Boolean = leaderReplicaIdOpt.contains(localBrokerId)
 
   /**
-   * 决定是否仅从 leader 读取
+   * 根据 Epoch 决定是否从 leader 拉取
    * @param currentLeaderEpoch
    * @param requireLeader
    * @return
@@ -1216,13 +1216,23 @@ class Partition(val topicPartition: TopicPartition,
       lastStableOffset = initialLastStableOffset)
   }
 
+  /**
+   * 根据时间戳获取 offset
+   * @param timestamp
+   * @param isolationLevel
+   * @param currentLeaderEpoch
+   * @param fetchOnlyFromLeader
+   * @return
+   */
   def fetchOffsetForTimestamp(timestamp: Long,
                               isolationLevel: Option[IsolationLevel],
                               currentLeaderEpoch: Optional[Integer],
                               fetchOnlyFromLeader: Boolean): Option[TimestampAndOffset] = inReadLock(leaderIsrUpdateLock) {
     // decide whether to only fetch from leader
+    // 根据 Epoch 决定是否从 leader 拉取
     val localLog = localLogWithEpochOrException(currentLeaderEpoch, fetchOnlyFromLeader)
 
+    // 根据隔离级别选择拉取的位置
     val lastFetchableOffset = isolationLevel match {
       case Some(IsolationLevel.READ_COMMITTED) => localLog.lastStableOffset
       case Some(IsolationLevel.READ_UNCOMMITTED) => localLog.highWatermark
@@ -1244,7 +1254,9 @@ class Partition(val topicPartition: TopicPartition,
         s"high watermark (${localLog.highWatermark}) is lagging behind the " +
         s"start offset from the beginning of this epoch ($epochStart)."))
 
+    // 使用时间戳拉取日志
     def getOffsetByTimestamp: Option[TimestampAndOffset] = {
+      // 获取日志文件，使用时间戳获取 offset
       logManager.getLog(topicPartition).flatMap(log => log.fetchOffsetByTimestamp(timestamp))
     }
 

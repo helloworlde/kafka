@@ -139,6 +139,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.PRODUCE => handleProduceRequest(request)
         // 拉取数据
         case ApiKeys.FETCH => handleFetchRequest(request)
+        // 获取消费者的 offset
         case ApiKeys.LIST_OFFSETS => handleListOffsetRequest(request)
         case ApiKeys.METADATA => handleTopicMetadataRequest(request)
         // 获取 leader 和 ISR 数据
@@ -990,13 +991,20 @@ class KafkaApis(val requestChannel: RequestChannel,
   def replicationQuota(fetchRequest: FetchRequest): ReplicaQuota =
     if (fetchRequest.isFromFollower) quotas.leader else UnboundedQuota
 
+  /**
+   * 获取消费者的 offset
+   * @param request
+   */
   def handleListOffsetRequest(request: RequestChannel.Request): Unit = {
     val version = request.header.apiVersion
 
+    // apiVersion 为 0
     val topics = if (version == 0)
       handleListOffsetRequestV0(request)
-    else
+    else {
+      // apiVersion 大于 0
       handleListOffsetRequestV1AndAbove(request)
+    }
 
     sendResponseMaybeThrottle(request, requestThrottleMs => new ListOffsetResponse(new ListOffsetResponseData()
       .setThrottleTimeMs(requestThrottleMs)
@@ -1064,6 +1072,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     val offsetRequest = request.body[ListOffsetRequest]
     val version = request.header.apiVersion
 
+    // 构建错误响应
     def buildErrorResponse(e: Errors, partition: ListOffsetPartition): ListOffsetPartitionResponse = {
       new ListOffsetPartitionResponse()
         .setPartitionIndex(partition.partitionIndex)
@@ -1072,9 +1081,11 @@ class KafkaApis(val requestChannel: RequestChannel,
         .setOffset(ListOffsetResponse.UNKNOWN_OFFSET)
     }
 
+    // 检查授权
     val (authorizedRequestInfo, unauthorizedRequestInfo) = partitionSeqByAuthorized(request.context,
         DESCRIBE, TOPIC, offsetRequest.topics.asScala.toSeq)(_.name)
 
+    // 授权失败响应
     val unauthorizedResponseStatus = unauthorizedRequestInfo.map(topic =>
       new ListOffsetTopicResponse()
         .setName(topic.name)
@@ -1085,6 +1096,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     val responseTopics = authorizedRequestInfo.map { topic =>
       val responsePartitions = topic.partitions.asScala.map { partition =>
         val topicPartition = new TopicPartition(topic.name, partition.partitionIndex)
+        // Partition 重复
         if (offsetRequest.duplicatePartitions.contains(topicPartition)) {
           debug(s"OffsetRequest with correlation id $correlationId from client $clientId on partition $topicPartition " +
               s"failed because the partition is duplicated in the request.")
@@ -1098,12 +1110,14 @@ class KafkaApis(val requestChannel: RequestChannel,
             else
               None
 
+            // 根据时间戳获取 offset
             val foundOpt = replicaManager.fetchOffsetForTimestamp(topicPartition,
               partition.timestamp,
               isolationLevelOpt,
               if (partition.currentLeaderEpoch == ListOffsetResponse.UNKNOWN_EPOCH) Optional.empty() else Optional.of(partition.currentLeaderEpoch),
               fetchOnlyFromLeader)
 
+            // 构建响应
             val response = foundOpt match {
               case Some(found) =>
                 val partitionResponse = new ListOffsetPartitionResponse()

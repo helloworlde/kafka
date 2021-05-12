@@ -1695,8 +1695,10 @@ class Log(@volatile private var _dir: File,
    * Get an offset based on the given timestamp
    * The offset returned is the offset of the first message whose timestamp is greater than or equals to the
    * given timestamp.
+   * 使用所给的时间戳获取 offset，返回的 offset 是第一个大于等于所给的时间戳的消息的 offset
    *
    * If no such message is found, the log end offset is returned.
+   * 如果没有找到消息，在返回日志的最后一个 offset
    *
    * `NOTE:` OffsetRequest V0 does not use this method, the behavior of OffsetRequest V0 remains the same as before
    * , i.e. it only gives back the timestamp based on the last modification time of the log segments.
@@ -1709,6 +1711,7 @@ class Log(@volatile private var _dir: File,
     maybeHandleIOException(s"Error while fetching offset by timestamp for $topicPartition in dir ${dir.getParent}") {
       debug(s"Searching offset for timestamp $targetTimestamp")
 
+      // 版本不支持
       if (config.messageFormatVersion < KAFKA_0_10_0_IV0 &&
         targetTimestamp != ListOffsetRequest.EARLIEST_TIMESTAMP &&
         targetTimestamp != ListOffsetRequest.LATEST_TIMESTAMP)
@@ -1724,20 +1727,26 @@ class Log(@volatile private var _dir: File,
         // The first cached epoch usually corresponds to the log start offset, but we have to verify this since
         // it may not be true following a message format version bump as the epoch will not be available for
         // log entries written in the older format.
+        // 最早的时间戳
         val earliestEpochEntry = leaderEpochCache.flatMap(_.earliestEntry)
         val epochOpt = earliestEpochEntry match {
           case Some(entry) if entry.startOffset <= logStartOffset => Optional.of[Integer](entry.epoch)
           case _ => Optional.empty[Integer]()
         }
+        // 返回没有时间戳，有日志开始的 offset 和 epoch
         return Some(new TimestampAndOffset(RecordBatch.NO_TIMESTAMP, logStartOffset, epochOpt))
       } else if (targetTimestamp == ListOffsetRequest.LATEST_TIMESTAMP) {
+        // 最后的时间戳
         val latestEpochOpt = leaderEpochCache.flatMap(_.latestEpoch).map(_.asInstanceOf[Integer])
         val epochOptional = Optional.ofNullable(latestEpochOpt.orNull)
+        // 返回没有时间戳，有日志结尾的 offset 和 epoch
         return Some(new TimestampAndOffset(RecordBatch.NO_TIMESTAMP, logEndOffset, epochOptional))
       }
 
       // We need to search the first segment whose largest timestamp is >= the target timestamp if there is one.
+      // 遍历 LogSegment 对象，查找最大的时间戳大于等于所给的时间戳的第一个 Segment
       val targetSeg = segmentsCopy.find(_.largestTimestamp >= targetTimestamp)
+      // 通过时间戳查找 offset
       targetSeg.flatMap(_.findOffsetByTimestamp(targetTimestamp, logStartOffset))
     }
   }
