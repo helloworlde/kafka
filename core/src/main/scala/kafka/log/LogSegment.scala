@@ -579,6 +579,7 @@ class LogSegment private[log] (val log: FileRecords,
 
   /**
    * Search the message offset based on timestamp and offset.
+   * 基于时间戳和 offset 查找消息的 offset
    *
    * This method returns an option of TimestampOffset. The returned value is determined using the following ordered list of rules:
    *
@@ -589,10 +590,19 @@ class LogSegment private[log] (val log: FileRecords,
    * - Otherwise, return an option of TimestampOffset. The offset is the offset of the first message whose timestamp
    *   is greater than or equals to the target timestamp and whose offset is greater than or equals to the startingOffset.
    *
+   * 这个方法返回一个可选的 TimestampOffset，返回的值使用以下顺序规则决定
+   * - 如果 Segment 中所有的消息小于 offset，返回 None
+   * - 如果 Segment 中所有的消息小于时间戳，返回 None
+   * - 如果 Segment 中所有的消息大于时间戳，或者没有时间戳，则会返回 Segment 开始的 offset，时间戳返回 Message.NoTimestamp
+   * - 除此之外，返回可选的 TimestampOffset，这个 offset 是第一个时间戳大于等于所给的时间戳，并且 offset 大于等于开始 offset 的消息
+   *
    * This methods only returns None when 1) all messages' offset < startOffing or 2) the log is not empty but we did not
    * see any message when scanning the log from the indexed position. The latter could happen if the log is truncated
    * after we get the indexed position but before we scan the log from there. In this case we simply return None and the
    * caller will need to check on the truncated log and maybe retry or even do the search on another log segment.
+   * 这个方法当所有消息的 offset 小于开始 offset 或者日志非空，但是从索引位置扫描的时候没有任何消息时返回 None；第二种情况发生在获取索引
+   * 之后日志被截断的场景
+   *
    *
    * @param timestamp The timestamp to search for.
    * @param startingOffset The starting offset to search.
@@ -600,10 +610,13 @@ class LogSegment private[log] (val log: FileRecords,
    */
   def findOffsetByTimestamp(timestamp: Long, startingOffset: Long = baseOffset): Option[TimestampAndOffset] = {
     // Get the index entry with a timestamp less than or equal to the target timestamp
+    // 从时间戳的索引中查找 offset
     val timestampOffset = timeIndex.lookup(timestamp)
+    // 从 offset 的索引中查找 position
     val position = offsetIndex.lookup(math.max(timestampOffset.offset, startingOffset)).position
 
     // Search the timestamp
+    // 从日志中查找满足时间戳的消息
     Option(log.searchForTimestamp(timestamp, position, startingOffset))
   }
 

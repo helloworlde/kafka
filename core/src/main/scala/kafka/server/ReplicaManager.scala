@@ -1013,12 +1013,23 @@ class ReplicaManager(val config: KafkaConfig,
     }
   }
 
+  /**
+   * 根据时间戳获取 offset
+   * @param topicPartition
+   * @param timestamp
+   * @param isolationLevel
+   * @param currentLeaderEpoch
+   * @param fetchOnlyFromLeader
+   * @return
+   */
   def fetchOffsetForTimestamp(topicPartition: TopicPartition,
                               timestamp: Long,
                               isolationLevel: Option[IsolationLevel],
                               currentLeaderEpoch: Optional[Integer],
                               fetchOnlyFromLeader: Boolean): Option[TimestampAndOffset] = {
+    // 获取 Partition
     val partition = getPartitionOrException(topicPartition)
+    // 获取 offset
     partition.fetchOffsetForTimestamp(timestamp, isolationLevel, currentLeaderEpoch, fetchOnlyFromLeader)
   }
 
