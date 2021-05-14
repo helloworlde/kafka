@@ -238,6 +238,7 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
 
   def isConsumerGroup: Boolean = protocolType.contains(ConsumerProtocol.PROTOCOL_TYPE)
 
+  // 添加成员
   def add(member: MemberMetadata, callback: JoinCallback = null): Unit = {
     if (members.isEmpty)
       this.protocolType = Some(member.protocolType)
@@ -246,8 +247,11 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
     assert(this.protocolType.orNull == member.protocolType)
     assert(supportsProtocols(member.protocolType, MemberMetadata.plainProtocolSet(member.supportedProtocols)))
 
+    // 如果没有 leader，则当前成员成为 leader
     if (leaderId.isEmpty)
       leaderId = Some(member.memberId)
+
+    // 添加到集合中
     members.put(member.memberId, member)
     member.supportedProtocols.foreach{ case (protocol, _) => supportedProtocols(protocol) += 1 }
     member.awaitingJoinCallback = callback
@@ -380,6 +384,9 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
     timeout.max(member.rebalanceTimeoutMs)
   }
 
+  /**
+   * 使用 UUID 生成一个成员 id
+   */
   def generateMemberId(clientId: String,
                        groupInstanceId: Option[String]): String = {
     groupInstanceId match {

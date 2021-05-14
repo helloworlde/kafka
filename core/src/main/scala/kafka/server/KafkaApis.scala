@@ -153,6 +153,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         // 拉取 Topic 指定 Partition 的 offset
         case ApiKeys.OFFSET_FETCH => handleOffsetFetchRequest(request)
         case ApiKeys.FIND_COORDINATOR => handleFindCoordinatorRequest(request)
+        // 加入消费者组
         case ApiKeys.JOIN_GROUP => handleJoinGroupRequest(request)
         // 心跳
         case ApiKeys.HEARTBEAT => handleHeartbeatRequest(request)
@@ -1637,10 +1638,15 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
   }
 
+  /**
+   * 处理消费者加入组请求
+   * 如果没有 member.id，会先分配一个返回，然后 consumer 使用分配的 member.id 再次加入
+   */
   def handleJoinGroupRequest(request: RequestChannel.Request): Unit = {
     val joinGroupRequest = request.body[JoinGroupRequest]
 
     // the callback for sending a join-group response
+    // 响应回调
     def sendResponseCallback(joinResult: JoinGroupResult): Unit = {
       def createResponse(requestThrottleMs: Int): AbstractResponse = {
         val protocolName = if (request.context.apiVersion() >= 7)
@@ -1667,24 +1673,30 @@ class KafkaApis(val requestChannel: RequestChannel,
       sendResponseMaybeThrottle(request, createResponse)
     }
 
+    // 版本不支持
     if (joinGroupRequest.data.groupInstanceId != null && config.interBrokerProtocolVersion < KAFKA_2_3_IV0) {
       // Only enable static membership when IBP >= 2.3, because it is not safe for the broker to use the static member logic
       // until we are sure that all brokers support it. If static group being loaded by an older coordinator, it will discard
       // the group.instance.id field, so static members could accidentally become "dynamic", which leads to wrong states.
       sendResponseCallback(JoinGroupResult(JoinGroupRequest.UNKNOWN_MEMBER_ID, Errors.UNSUPPORTED_VERSION))
     } else if (!authorize(request.context, READ, GROUP, joinGroupRequest.data.groupId)) {
+      // 没有授权
       sendResponseCallback(JoinGroupResult(JoinGroupRequest.UNKNOWN_MEMBER_ID, Errors.GROUP_AUTHORIZATION_FAILED))
     } else {
+      // group 实例 Id
       val groupInstanceId = Option(joinGroupRequest.data.groupInstanceId)
 
       // Only return MEMBER_ID_REQUIRED error if joinGroupRequest version is >= 4
       // and groupInstanceId is configured to unknown.
+      // 如果版本大于 4， 则要求有 groupInstanceId
       val requireKnownMemberId = joinGroupRequest.version >= 4 && groupInstanceId.isEmpty
 
       // let the coordinator handle join-group
+      // 由协调器处理加入
       val protocols = joinGroupRequest.data.protocols.valuesList.asScala.map(protocol =>
         (protocol.name, protocol.metadata)).toList
 
+      // 协调器处理加入分组的请求
       groupCoordinator.handleJoinGroup(
         joinGroupRequest.data.groupId,
         joinGroupRequest.data.memberId,

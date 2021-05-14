@@ -221,11 +221,14 @@ class GroupMetadataManager(brokerId: Int,
   /**
    * Get the group associated with the given groupId - the group is created if createIfNotExist
    * is true - or null if not found
+   *
+   * 获取与所给的 groupId 相关的 group；如果 createIfNotExist 是 true，则创建；如果是 false，没有则返回 null
    */
   def getOrMaybeCreateGroup(groupId: String, createIfNotExist: Boolean): Option[GroupMetadata] = {
-    if (createIfNotExist)
+    if (createIfNotExist) {
+      // 创建，并添加到缓存
       Option(groupMetadataCache.getAndMaybePut(groupId, new GroupMetadata(groupId, Empty, time)))
-    else
+    } else
       Option(groupMetadataCache.get(groupId))
   }
 
