@@ -141,6 +141,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.FETCH => handleFetchRequest(request)
         // 获取消费者的 offset
         case ApiKeys.LIST_OFFSETS => handleListOffsetRequest(request)
+        // 获取 Topic metadata
         case ApiKeys.METADATA => handleTopicMetadataRequest(request)
         // 获取 leader 和 ISR 数据
         case ApiKeys.LEADER_AND_ISR => handleLeaderAndIsrRequest(request)
@@ -1184,11 +1185,15 @@ class KafkaApis(val requestChannel: RequestChannel,
     (responseTopics ++ unauthorizedResponseStatus).toList
   }
 
+  /**
+   * 创建 Topic
+   */
   private def createTopic(topic: String,
                           numPartitions: Int,
                           replicationFactor: Int,
                           properties: util.Properties = new util.Properties()): MetadataResponseTopic = {
     try {
+      // 创建 Topic，写入 zk
       adminZkClient.createTopic(topic, numPartitions, replicationFactor, properties, RackAwareMode.Safe)
       info("Auto creation of topic %s with %d partitions and replication factor %d is successful"
         .format(topic, numPartitions, replicationFactor))
@@ -1210,14 +1215,22 @@ class KafkaApis(val requestChannel: RequestChannel,
       .setPartitions(partitionData)
   }
 
+  /**
+   * 创建内部  Topic
+   * @param topic
+   * @return
+   */
   private def createInternalTopic(topic: String): MetadataResponseTopic = {
     if (topic == null)
       throw new IllegalArgumentException("topic must not be null")
 
+    // 存活的 Broker
     val aliveBrokers = metadataCache.getAliveBrokers
 
     topic match {
       case GROUP_METADATA_TOPIC_NAME =>
+        // 消费者 offset topic
+        // 存活的 Broker 数量不足
         if (aliveBrokers.size < config.offsetsTopicReplicationFactor) {
           error(s"Number of alive brokers '${aliveBrokers.size}' does not meet the required replication factor " +
             s"'${config.offsetsTopicReplicationFactor}' for the offsets topic (configured via " +
@@ -1225,10 +1238,12 @@ class KafkaApis(val requestChannel: RequestChannel,
             s"and not all brokers are up yet.")
           metadataResponseTopic(Errors.COORDINATOR_NOT_AVAILABLE, topic, true, util.Collections.emptyList())
         } else {
+          // 创建 Topic
           createTopic(topic, config.offsetsTopicPartitions, config.offsetsTopicReplicationFactor.toInt,
             groupCoordinator.offsetsTopicConfigs)
         }
       case TRANSACTION_STATE_TOPIC_NAME =>
+        // 事务消息 Topic
         if (aliveBrokers.size < config.transactionTopicReplicationFactor) {
           error(s"Number of alive brokers '${aliveBrokers.size}' does not meet the required replication factor " +
             s"'${config.transactionTopicReplicationFactor}' for the transactions state topic (configured via " +
@@ -1236,6 +1251,7 @@ class KafkaApis(val requestChannel: RequestChannel,
             s"and not all brokers are up yet.")
           metadataResponseTopic(Errors.COORDINATOR_NOT_AVAILABLE, topic, true, util.Collections.emptyList())
         } else {
+          // 创建 Topic
           createTopic(topic, config.transactionTopicPartitions, config.transactionTopicReplicationFactor.toInt,
             txnCoordinator.transactionTopicConfigs)
         }
@@ -1248,23 +1264,32 @@ class KafkaApis(val requestChannel: RequestChannel,
     topicMetadata.headOption.getOrElse(createInternalTopic(topic))
   }
 
+  /**
+   * 获取 Topic 的 metadata
+   * 如果没有 topic 则创建
+   */
   private def getTopicMetadata(allowAutoTopicCreation: Boolean, topics: Set[String], listenerName: ListenerName,
                                errorUnavailableEndpoints: Boolean,
                                errorUnavailableListeners: Boolean): Seq[MetadataResponseTopic] = {
+    // 从缓存中获取 metadata
     val topicResponses = metadataCache.getTopicMetadata(topics, listenerName,
         errorUnavailableEndpoints, errorUnavailableListeners)
     if (topics.isEmpty || topicResponses.size == topics.size) {
       topicResponses
     } else {
+      // 如果 topic 不存在，则创建 Topic
       val nonExistentTopics = topics.diff(topicResponses.map(_.name).toSet)
       val responsesForNonExistentTopics = nonExistentTopics.map { topic =>
+        // 内部 topic
         if (isInternal(topic)) {
+          // 创建
           val topicMetadata = createInternalTopic(topic)
           if (topicMetadata.errorCode == Errors.COORDINATOR_NOT_AVAILABLE.code)
             metadataResponseTopic(Errors.INVALID_REPLICATION_FACTOR, topic, true, util.Collections.emptyList())
           else
             topicMetadata
         } else if (allowAutoTopicCreation && config.autoCreateTopicsEnable) {
+          // 创建 Topic
           createTopic(topic, config.numPartitions, config.defaultReplicationFactor)
         } else {
           metadataResponseTopic(Errors.UNKNOWN_TOPIC_OR_PARTITION, topic, false, util.Collections.emptyList())
@@ -1276,16 +1301,20 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   /**
    * Handle a topic metadata request
+   * 处理获取 Topic metadata 的请求
+   * 不存在的 Topic 会创建
    */
   def handleTopicMetadataRequest(request: RequestChannel.Request): Unit = {
     val metadataRequest = request.body[MetadataRequest]
     val requestVersion = request.header.apiVersion
 
+    // 如果是获取所有 Topic，则调用获取所有 Topic 的方法
     val topics = if (metadataRequest.isAllTopics)
       metadataCache.getAllTopics()
     else
       metadataRequest.topics.asScala.toSet
 
+    // 检查授权
     val authorizedForDescribeTopics = filterByAuthorized(request.context, DESCRIBE, TOPIC,
       topics, logIfDenied = !metadataRequest.isAllTopics)(identity)
     var (authorizedTopics, unauthorizedForDescribeTopics) = topics.partition(authorizedForDescribeTopics.contains)
@@ -1318,20 +1347,27 @@ class KafkaApis(val requestChannel: RequestChannel,
 
     // In version 0, we returned an error when brokers with replicas were unavailable,
     // while in higher versions we simply don't include the broker in the returned broker list
+    // 如果 version 是 0，当 Broker replicas 不可用时返回错误，如果是高版本简化，在返回的 Broker 集合中不返回这个 Broker
     val errorUnavailableEndpoints = requestVersion == 0
     // In versions 5 and below, we returned LEADER_NOT_AVAILABLE if a matching listener was not found on the leader.
     // From version 6 onwards, we return LISTENER_NOT_FOUND to enable diagnosis of configuration errors.
+    // version 5 及之前的版本，如果 leader 上没有发现匹配的 listener，则返回 LEADER_NOT_AVAILABLE
+    // 从 version 6 开始，则返回 LISTENER_NOT_FOUND
     val errorUnavailableListeners = requestVersion >= 6
     val topicMetadata =
       if (authorizedTopics.isEmpty)
         Seq.empty[MetadataResponseTopic]
-      else
+      else {
+        // 获取 Topic 的 metadata，如果不存在则创建
         getTopicMetadata(metadataRequest.allowAutoTopicCreation, authorizedTopics, request.context.listenerName,
           errorUnavailableEndpoints, errorUnavailableListeners)
+      }
 
     var clusterAuthorizedOperations = Int.MinValue
+    // version 大于 8
     if (request.header.apiVersion >= 8) {
       // get cluster authorized operations
+      // 获取授权的操作
       if (metadataRequest.data.includeClusterAuthorizedOperations) {
         if (authorize(request.context, DESCRIBE, CLUSTER, CLUSTER_NAME))
           clusterAuthorizedOperations = authorizedOperations(request, Resource.CLUSTER)
@@ -1349,11 +1385,13 @@ class KafkaApis(val requestChannel: RequestChannel,
 
     val completeTopicMetadata = topicMetadata ++ unauthorizedForCreateTopicMetadata ++ unauthorizedForDescribeTopicMetadata
 
+    // 所有存活的 Broker
     val brokers = metadataCache.getAliveBrokers
 
     trace("Sending topic metadata %s and brokers %s for correlation id %d to client %s".format(completeTopicMetadata.mkString(","),
       brokers.mkString(","), request.header.correlationId, request.header.clientId))
 
+    // 响应
     sendResponseMaybeThrottle(request, requestThrottleMs =>
        MetadataResponse.prepareResponse(
          requestThrottleMs,

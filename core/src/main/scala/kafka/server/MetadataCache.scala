@@ -79,6 +79,7 @@ class MetadataCache(brokerId: Int) extends Logging {
   // errorUnavailableEndpoints exists to support v0 MetadataResponses
   // If errorUnavailableListeners=true, return LISTENER_NOT_FOUND if listener is missing on the broker.
   // Otherwise, return LEADER_NOT_AVAILABLE for broker unavailable and missing listener (Metadata response v5 and below).
+  // 获取 Topic Partition 的信息
   private def getPartitionMetadata(snapshot: MetadataSnapshot, topic: String, listenerName: ListenerName, errorUnavailableEndpoints: Boolean,
                                    errorUnavailableListeners: Boolean): Option[Iterable[MetadataResponsePartition]] = {
     snapshot.partitionStates.get(topic).map { partitions =>
@@ -86,18 +87,22 @@ class MetadataCache(brokerId: Int) extends Logging {
         val topicPartition = new TopicPartition(topic, partitionId.toInt)
         val leaderBrokerId = partitionState.leader
         val leaderEpoch = partitionState.leaderEpoch
+        // 获取可用的 endpoint
         val maybeLeader = getAliveEndpoint(snapshot, leaderBrokerId, listenerName)
 
+        // 存活的副本
         val replicas = partitionState.replicas
         val filteredReplicas = maybeFilterAliveReplicas(snapshot, replicas, listenerName, errorUnavailableEndpoints)
 
+        // 存活的 ISR
         val isr = partitionState.isr
         val filteredIsr = maybeFilterAliveReplicas(snapshot, isr, listenerName, errorUnavailableEndpoints)
-
+        // 离线的副本
         val offlineReplicas = partitionState.offlineReplicas
 
         maybeLeader match {
           case None =>
+            // 没有 leader
             val error = if (!snapshot.aliveBrokers.contains(leaderBrokerId)) { // we are already holding the read lock
               debug(s"Error while fetching metadata for $topicPartition: leader not available")
               Errors.LEADER_NOT_AVAILABLE
@@ -117,6 +122,7 @@ class MetadataCache(brokerId: Int) extends Logging {
               .setOfflineReplicas(offlineReplicas)
 
           case Some(leader) =>
+            // 有 leader
             val error = if (filteredReplicas.size < replicas.size) {
               debug(s"Error while fetching metadata for $topicPartition: replica information not available for " +
                 s"following brokers ${replicas.asScala.filterNot(filteredReplicas.contains).mkString(",")}")
@@ -129,6 +135,7 @@ class MetadataCache(brokerId: Int) extends Logging {
               Errors.NONE
             }
 
+            // 响应
             new MetadataResponsePartition()
               .setErrorCode(error.code)
               .setPartitionIndex(partitionId.toInt)
@@ -162,12 +169,14 @@ class MetadataCache(brokerId: Int) extends Logging {
   }
 
   // errorUnavailableEndpoints exists to support v0 MetadataResponses
+  // 从缓存中获取 metadata 信息
   def getTopicMetadata(topics: Set[String],
                        listenerName: ListenerName,
                        errorUnavailableEndpoints: Boolean = false,
                        errorUnavailableListeners: Boolean = false): Seq[MetadataResponseTopic] = {
     val snapshot = metadataSnapshot
     topics.toSeq.flatMap { topic =>
+      // 获取 Topic 的 Partition 信息
       getPartitionMetadata(snapshot, topic, listenerName, errorUnavailableEndpoints, errorUnavailableListeners).map { partitionMetadata =>
         new MetadataResponseTopic()
           .setErrorCode(Errors.NONE.code)

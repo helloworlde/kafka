@@ -41,6 +41,8 @@ class AdminZkClient(zkClient: KafkaZkClient) extends Logging {
 
   /**
    * Creates the topic with given configuration
+   * 使用给定的配置创建 Topic
+   *
    * @param topic topic name to create
    * @param partitions  Number of partitions to be set
    * @param replicationFactor Replication factor
@@ -52,13 +54,18 @@ class AdminZkClient(zkClient: KafkaZkClient) extends Logging {
                   replicationFactor: Int,
                   topicConfig: Properties = new Properties,
                   rackAwareMode: RackAwareMode = RackAwareMode.Enforced): Unit = {
+    // broker 的 metadata
     val brokerMetadatas = getBrokerMetadatas(rackAwareMode)
+    // 分配副本
     val replicaAssignment = AdminUtils.assignReplicasToBrokers(brokerMetadatas, partitions, replicationFactor)
+    // 创建 Topic
     createTopicWithAssignment(topic, topicConfig, replicaAssignment)
   }
 
   /**
    * Gets broker metadata list
+   * 获取 Broker 的 metadata 集合
+   *
    * @param rackAwareMode
    * @param brokerList
    * @return
