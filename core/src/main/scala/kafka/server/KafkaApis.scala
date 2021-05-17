@@ -3161,10 +3161,15 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
   }
 
+  /**
+   * 处理 offset 删除请求
+   * @param request
+   */
   def handleOffsetDeleteRequest(request: RequestChannel.Request): Unit = {
     val offsetDeleteRequest = request.body[OffsetDeleteRequest]
     val groupId = offsetDeleteRequest.data.groupId
 
+    // 检查授权
     if (authorize(request.context, DELETE, GROUP, groupId)) {
       val topics = offsetDeleteRequest.data.topics.asScala
       val authorizedTopics = filterByAuthorized(request.context, READ, TOPIC, topics)(_.name)
@@ -3184,11 +3189,13 @@ class KafkaApis(val requestChannel: RequestChannel,
         }
       }
 
+      // 处理删除 offset
       val (groupError, authorizedTopicPartitionsErrors) = groupCoordinator.handleDeleteOffsets(
         groupId, topicPartitions)
 
       topicPartitionErrors ++= authorizedTopicPartitionsErrors
 
+      // 返回响应
       sendResponseMaybeThrottle(request, requestThrottleMs => {
         if (groupError != Errors.NONE)
           offsetDeleteRequest.getErrorResponse(requestThrottleMs, groupError)

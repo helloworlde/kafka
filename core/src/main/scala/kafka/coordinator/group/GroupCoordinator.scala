@@ -573,11 +573,15 @@ class GroupCoordinator(val brokerId: Int,
     groupErrors
   }
 
+  /**
+   * 处理删除 offset
+   */
   def handleDeleteOffsets(groupId: String, partitions: Seq[TopicPartition]): (Errors, Map[TopicPartition, Errors]) = {
     var groupError: Errors = Errors.NONE
     var partitionErrors: Map[TopicPartition, Errors] = Map()
     var partitionsEligibleForDeletion: Seq[TopicPartition] = Seq()
 
+    // 检查 group 的状态
     validateGroupStatus(groupId, ApiKeys.OFFSET_DELETE) match {
       case Some(error) =>
         groupError = error
@@ -592,6 +596,7 @@ class GroupCoordinator(val brokerId: Int,
             group.inLock {
               group.currentState match {
                 case Dead =>
+                  // 如果没有 group，则返回错误
                   groupError = if (groupManager.groupNotExists(groupId))
                     Errors.GROUP_ID_NOT_FOUND else Errors.NOT_COORDINATOR
 
@@ -599,6 +604,7 @@ class GroupCoordinator(val brokerId: Int,
                   partitionsEligibleForDeletion = partitions
 
                 case PreparingRebalance | CompletingRebalance | Stable if group.isConsumerGroup =>
+                  // 如果准备重平衡，或者已经完成重平衡或者在正常状态，则检查是否订阅了 topic
                   val (consumed, notConsumed) =
                     partitions.partition(tp => group.isSubscribedToTopic(tp.topic()))
 
@@ -611,6 +617,7 @@ class GroupCoordinator(val brokerId: Int,
             }
 
             if (partitionsEligibleForDeletion.nonEmpty) {
+              // 删除 group 的 metadata
               val offsetsRemoved = groupManager.cleanupGroupMetadata(Seq(group), group => {
                 group.removeOffsets(partitionsEligibleForDeletion)
               })
